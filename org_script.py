@@ -1146,7 +1146,7 @@ def hopefully_somewhat_better_directory_crawl(root_path, db_object, add_new_file
             global_num_of_checked_jobs += 1
 
         if "PR_AB_MATRIX" in file_path:
-            num_0, num_1 = read_pr_ab_matrix(file_dict["PR_AB_MATRIX"])
+            num_0, num_1, _ = read_pr_ab_matrix(file_dict["PR_AB_MATRIX"])
             tree_info["MISSING_DATA_RATE"] = num_0 / (num_0 + num_1)
 
     except Exception as e:
