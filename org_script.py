@@ -11,7 +11,7 @@ import re
 import copy
 from io import StringIO
 from urllib.request import urlopen
-from Bio import Phylo
+from Bio import Phylo, SeqIO, Seq, SeqRecord
 
 global_max_tree_file_len = 0
 
@@ -47,7 +47,7 @@ COLUMNS = [
     ("BRANCH_LENGTH_MEAN", "FLOAT"), ("BRANCH_LENGTH_VARIANCE", "FLOAT"),
     ("IS_INDELIBLE_COMPATIBLE", "INT"), ("OVERALL_NUM_ALIGNMENT_SITES", "INT"), ("OVERALL_NUM_PATTERNS", "INT"),
     ("OVERALL_GAPS", "FLOAT"), ("INVARIANT_SITES", "FLOAT"), ("RAXML_NG", "INT"),
-    ("OVERALL_NUM_PARTITIONS", "INT")
+    ("OVERALL_NUM_PARTITIONS", "INT"), ("MISSING_DATA_RATE", "FLOAT")   # TODO: missing data using presence/absence matrices
 ]
 
 PARTITION_COLUMNS = [
@@ -75,8 +75,10 @@ SUBSTITUTION_MODELS = {
 BASE_GITHUB_LINK = "https://raw.githubusercontent.com/angtft/RAxMLGrove/main/trees/{}/{}"
 BASE_DB_FILE_NAME = "latest.db"
 BASE_FILE_DIR = os.path.dirname(__file__)
+BASE_OUT_DIR = os.path.join(BASE_FILE_DIR, "out")
 BASE_SEQ_FILE_FORMAT = "Phylip"  # TODO: maybe think some more about formats (since Phylip only allows taxon names up to 10 characters, and SeqGen doesn't output other formats?)
 BASE_DAWG_SEQ_FILE_FORMAT = "Fasta"
+BASE_SQL_FIND_COMMAND = "SELECT * FROM TREE t INNER JOIN PARTITION p ON t.TREE_ID = p.PARENT_ID"
 
 global_num_partitioned_trees = 0  # TODO: remove this!
 
@@ -194,11 +196,13 @@ class Dawg(object):
             if num_repeats > 1:
                 for i in range(0, num_repeats):
                     call = [self.execute_path, self.config_path, "-o",
-                            os.path.join(out_path, f"seq_{i}.{BASE_DAWG_SEQ_FILE_FORMAT}")]
+                            # os.path.join(out_path, f"seq_{i}.{BASE_DAWG_SEQ_FILE_FORMAT}")]
+                            out_path]
                     subprocess.check_output(call, cwd=BASE_FILE_DIR)
             else:
                 call = [self.execute_path, self.config_path, "-o",
-                        os.path.join(out_path, f"seq_{num_of_sequence}.{BASE_DAWG_SEQ_FILE_FORMAT}")]
+                        # os.path.join(out_path, f"seq_{num_of_sequence}.{BASE_DAWG_SEQ_FILE_FORMAT}")]
+                        out_path]
                 subprocess.check_output(call, cwd=BASE_FILE_DIR)
         except Exception as e:
             print(e)
@@ -767,7 +771,7 @@ def init_args(arguments):
                                                            "a sequence we randomly draw a tree from the db (can be "
                                                            "used with -q) and run a sequence generator with that tree. "
                                                            "(generate)")
-    parser.add_argument("--local", default=True, help="TODO")
+    parser.add_argument("--local", default=True, help="FOR TESTING PURPOSES (don't use it).")
     parser.add_argument("--force-rewrite", action='store_true', help="Forces to rewrite the default db or the db "
                                                                      "specified using '-n'. (create)")
     parser.add_argument("--seq-len", default=8000, help="Default generated sequence length if it is not specified in "
@@ -776,8 +780,13 @@ def init_args(arguments):
                                               "specified in the tree log data. (generate)")
     parser.add_argument("--filter-outliers", action='store_true', help="Filters trees with uncommon characteristics "
                                                                        "(using Tukey's fences). (generate)")
+    parser.add_argument("--insert-matrix-gaps", action="store_true", help="Uses the presence/absence matrices to "
+                                                                          "insert gaps into the simulated sequences. "
+                                                                          "(generate)")
     parser.add_argument("-g", "--generator", choices=["dawg", "seq-gen"], default="dawg",
                         help="Selects the sequence generator used. (generate)")
+    parser.add_argument("-o", "--out-dir", default=BASE_OUT_DIR,
+                        help=f"Output directory (default: {BASE_OUT_DIR}).")
 
     args = parser.parse_args(arguments)
     if args.operation == "create" and not args.archive_path:
@@ -788,6 +797,8 @@ def init_args(arguments):
         parser.error("'execute' requires '-c'")
     if args.operation == "find" and not args.query:
         parser.error("'find' requires '-q'")
+    if args.operation in ["find", "generate"] and args.out_dir == BASE_OUT_DIR:
+        print(f"No output directory specified. Using default '{BASE_OUT_DIR}'.")
 
     return args
 
@@ -811,7 +822,7 @@ def download_trees(dest_path, result, amount=0):
             tree_id = dct["TREE_ID"]
             dir_path = os.path.join(dest_path, tree_id)
             possible_files = [
-                "tree_best.newick", "tree_part.newick", "log_0.txt", "model_0.txt"
+                "tree_best.newick", "tree_part.newick", "log_0.txt", "model_0.txt", "iqt.pr_ab_matrix"
             ]
             create_dir_if_needed(dir_path)
 
@@ -886,6 +897,127 @@ def file_exists(path, substr):
     return False
 
 
+def read_pr_ab_matrix(path):
+    with open(path) as file:
+        first_line = True
+        num_bits = 0
+        num_0 = 0
+        num_1 = 0
+        matrix = []
+
+        for line in file:
+            line_spl = line.rstrip().split()
+            if first_line:
+                first_line = False
+                num_bits = int(line_spl[1])
+                continue
+
+            temp_list = []
+
+            for i in range(1, num_bits + 1):
+                val = int(line_spl[-i])
+                if val == 0:
+                    num_0 += 1
+                elif val == 1:
+                    num_1 += 1
+
+                temp_list.append(val)
+            temp_list.reverse()
+            matrix.append(temp_list)
+
+    return num_0, num_1, matrix
+
+
+def assemble_sequences(path_list, out_dir, matrix_path="", tree_id=0):
+    out_path = os.path.join(out_dir, f"test_{tree_id}.fasta")
+    with open(out_path, "w+") as file:
+        file.write("")
+
+    records_list = []
+    if os.path.isfile(matrix_path):
+        _, _, matrix = read_pr_ab_matrix(matrix_path)
+    else:
+        matrix = []
+
+    for path in path_list:
+        records = SeqIO.parse(path, BASE_DAWG_SEQ_FILE_FORMAT.lower())
+        records_list.append(list(records))
+
+    for i in range(len(records_list[0])):
+        sequence = ""
+        for j in range(len(path_list)):
+            bit = matrix[i][j] if matrix else 1
+
+            if bit:
+                sequence += str(records_list[j][i].seq)
+            else:
+                sequence += "_" * len(str(records_list[j][i].seq))
+        new_rec = SeqRecord.SeqRecord(Seq.Seq(sequence), id=records_list[0][i].id, description="")
+
+        with open(out_path, "a+") as file:
+            SeqIO.write(new_rec, file, "fasta")
+
+
+def generate_sequences(results, args):
+    if args.generator == "seq-gen":
+        generator = SeqGen(os.path.join(BASE_FILE_DIR, "tools", "Seq-Gen-1.3.4"))
+    else:
+        generator = Dawg(os.path.join(BASE_FILE_DIR, "tools", "dawg-1.2"))
+    print(f"Using {args.generator}.")
+
+    temp_tree_dir = os.path.join(BASE_FILE_DIR, "temp")
+    create_dir_if_needed(temp_tree_dir)
+
+    grouped_results = {}
+    for result in results:
+        tree_id = result["TREE_ID"]
+        if tree_id in grouped_results:
+            grouped_results[tree_id].append(result)
+        else:
+            grouped_results[tree_id] = [result]
+
+    for key in list(grouped_results.keys()):
+        try:
+            num_parts = grouped_results[key][0]["OVERALL_NUM_PARTITIONS"]
+            if num_parts != len(grouped_results[key]):
+                del grouped_results[key]
+        except Exception as e:
+            print(e)
+            del grouped_results[key]
+
+    # TODO: think of ways to fix the following
+    for i in range(int(args.num_sequences)):
+        rand_key = random.choice(list(grouped_results.keys()))   # TODO: currently we just randomly pick results out of the whole set. however, it could be better to
+                                                                 #       iterate through all keys if num_sequences > len(grouped_results)
+        rand_tree_data = grouped_results[rand_key][0]
+        print(f"\nRun {i}. Selected tree:\n {rand_tree_data}")
+
+        if rand_tree_data["NUM_ALIGNMENT_SITES"] == "None":
+            rand_tree_data["NUM_ALIGNMENT_SITES"] = int(args.seq_len)
+        if args.set_seq_len:
+            rand_tree_data["NUM_ALIGNMENT_SITES"] = int(args.set_seq_len)
+
+        download_trees(temp_tree_dir, [rand_tree_data], amount=1)
+        dl_tree_path = os.path.join(temp_tree_dir, rand_tree_data["TREE_ID"])
+        tree_path = os.path.join(dl_tree_path, BASE_TREE_NAME.format("best", BASE_TREE_FORMAT))
+        if args.insert_matrix_gaps:
+            pr_ab_matrix_path = os.path.join(dl_tree_path, "iqt.pr_ab_matrix")
+        else:
+            pr_ab_matrix_path = ""
+
+        seq_part_paths = []
+        partitions = grouped_results[rand_key]
+
+        for p_num in range(len(partitions)):
+            seq_part_path = os.path.join(dl_tree_path, f"seq_{i}.part{p_num}.{BASE_DAWG_SEQ_FILE_FORMAT}")  # TODO: do something with the formats...
+
+            part = partitions[p_num]
+            generator.execute(tree_path, seq_part_path, part)
+            seq_part_paths.append(seq_part_path)
+
+        assemble_sequences(seq_part_paths, out_dir=args.out_dir, matrix_path=pr_ab_matrix_path, tree_id=rand_tree_data["TREE_ID"])
+
+
 def hopefully_somewhat_better_directory_crawl(root_path, db_object, add_new_files_only=False, local=False):
     global global_tree_dict_list
     global global_part_list_dict
@@ -921,6 +1053,8 @@ def hopefully_somewhat_better_directory_crawl(root_path, db_object, add_new_file
                 is_rax_ng = True
             elif ".raxml.log" in file_path or "log_0" in file_path:
                 file_dict["INFO"] = current_path
+            elif "iqt.pr_ab_matrix" == file_path:
+                file_dict["PR_AB_MATRIX"] = current_path
 
     try:
         if is_rax_ng:
@@ -1010,6 +1144,11 @@ def hopefully_somewhat_better_directory_crawl(root_path, db_object, add_new_file
             tree_info["OVERALL_NUM_PARTITIONS"] = len(partitions_info)
 
             global_num_of_checked_jobs += 1
+
+        if "PR_AB_MATRIX" in file_path:
+            num_0, num_1 = read_pr_ab_matrix(file_dict["PR_AB_MATRIX"])
+            tree_info["MISSING_DATA_RATE"] = num_0 / (num_0 + num_1)
+
     except Exception as e:
         print(f"Exception in directory crawl: {e}")
         return
@@ -1064,15 +1203,11 @@ def main(args_list):
                 """local_tree_copy(tree_dest_dir, result,
                                 amount=(int(amount_to_download) if amount_to_download else num_results))"""
     elif args.operation == "generate":
-        if args.generator == "seq-gen":
-            generator = SeqGen(os.path.join(BASE_FILE_DIR, "tools", "Seq-Gen-1.3.4"))
-        else:
-            generator = Dawg(os.path.join(BASE_FILE_DIR, "tools", "dawg-1.2"))
         print(f"Using {args.generator}.")
 
         if not args.filter_outliers:
-            query = args.query if args.query else "MODEL LIKE 'GTR%' AND RATE_AC AND FREQ_A"
-            results = db_object.find(f"SELECT * FROM TREE t INNER JOIN PARTITION p ON t.TREE_ID = p.PARENT_ID WHERE {query};")
+            query = args.query if args.query else "MODEL LIKE 'GTR%' AND RATE_AC AND FREQ_A AND OVERALL_NUM_ALIGNMENT_SITES > 0"      # TODO: expand possible models
+            results = db_object.find(f"{BASE_SQL_FIND_COMMAND} WHERE {query};")
         else:
             categories = {  # TODO: make this work for AA (and all the other stuff)
                 "NUM_TAXA": 0,
@@ -1093,7 +1228,7 @@ def main(args_list):
                 "GAPS": 0
                 # "TREE_LENGTH": 0     # TODO: check if available for all
             }
-            all_tree_data = db_object.find("SELECT * FROM TREE t INNER JOIN PARTITION p ON t.TREE_ID = p.PARENT_ID;")
+            all_tree_data = db_object.find(f"{BASE_SQL_FIND_COMMAND};")
             filter_list = []
             for cat in categories:
                 column_data = [entry[cat] for entry in all_tree_data]
@@ -1104,28 +1239,10 @@ def main(args_list):
                 query = args.query + " AND " + " AND ".join(filter_list)
             else:
                 query = " AND ".join(filter_list)
-            results = db_object.find(f"SELECT * FROM TREE t INNER JOIN PARTITION p ON t.TREE_ID = p.PARENT_ID WHERE MODEL LIKE 'GTR%' AND {query};")
+            results = db_object.find(f"{BASE_SQL_FIND_COMMAND} WHERE MODEL LIKE 'GTR%' AND OVERALL_NUM_ALIGNMENT_SITES > 0 AND {query};")
 
-        print("Found {} trees".format(len(results)))
-        if len(results) > 0:
-            temp_tree_dir = os.path.join(BASE_FILE_DIR, "temp")
-            create_dir_if_needed(temp_tree_dir)
-
-            # TODO: think of ways to fix the following
-            for i in range(int(args.num_sequences)):
-                rand_tree_data = random.choice(results)
-                print(f"\nRun {i}. Selected tree:\n {rand_tree_data}")
-
-                if rand_tree_data["NUM_ALIGNMENT_SITES"] == "None":
-                    rand_tree_data["NUM_ALIGNMENT_SITES"] = int(args.seq_len)
-                if args.set_seq_len:
-                    rand_tree_data["NUM_ALIGNMENT_SITES"] = int(args.set_seq_len)
-
-                download_trees(temp_tree_dir, [rand_tree_data], amount=1)
-                dl_tree_path = os.path.join(temp_tree_dir, rand_tree_data["TREE_ID"])
-                tree_path = os.path.join(dl_tree_path, BASE_TREE_NAME.format("best", BASE_TREE_FORMAT))
-
-                generator.execute(tree_path, "./out_seq/", rand_tree_data, num_of_sequence=i)
+        print("Found {} trees".format(len(set([r["TREE_ID"] for r in results]))))
+        generate_sequences(results, args)
 
     db_object.close()
 

@@ -1,6 +1,6 @@
 # RAxMLGrove Example Scripts
 
-Until we come up with a more clever solution (as GitHub only allows single files to be below 100 MB), the SQLite database 'latest.db' contains only the trees generated with RAxML8. 
+Until we come up with a more clever solution (as GitHub only allows single files to be below 100 MB), the SQLite database 'latest.db' contains only the trees generated with RAxML8.
 The figures below were generated using that data only. The full database can be currently downloaded from [here](https://drive.google.com/file/d/1ucf2smX9XUdiOOgYP-GQ6COcYR-ujZaH/view?usp=sharing).
 
 
@@ -27,6 +27,8 @@ Table PARTITION
 ("AMONG_SITE_RATE_HETEROGENEITY_STR", "CHAR(100)"), ("ASCERTAINMENT_BIAS_CORRECTION_STR", "CHAR(100)"),
 ("CUSTOM_CHAR_TO_STATE_MAPPING", "CHAR(100)"), ("PARENT_ID", "INT")
 ```
+
+
 
 
 ## Some Figures

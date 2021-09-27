@@ -5,6 +5,7 @@ import os
 import sqlite3
 import pandas as pd
 import matplotlib
+import numpy as np
 
 matplotlib.use("Agg")
 import matplotlib.pyplot as plt
@@ -107,6 +108,14 @@ def get_values_for_cat(lst, cat):
     return ret
 
 
+def is_float(value):
+    try:
+        c = float(value)
+    except Exception as e:
+        return False
+    return True
+
+
 def do_test(name):
     db_path = os.path.join(BASE_FILE_DIR, "..", name)
 
@@ -141,21 +150,24 @@ def do_test(name):
     fig_paths = []
 
     for cat in columns:
-        print(f"cat: {cat}")
         raw_values = df.loc[:, cat]
+        raw_values = [float(v) for v in list(filter(lambda x: x != "None" and is_float(x), raw_values))]
+
         low_fence, high_fence = get_tukeys_fences(raw_values)
-        results = db_object.find(f"SELECT * FROM TREE t INNER JOIN PARTITION p ON t.TREE_ID = p.PARENT_ID WHERE {cat} >= {low_fence} AND {cat} <= {high_fence} "
-                                 f"AND (PARTITION_NUM == 'None' OR PARTITION_NUM == 0);")
+        results = db_object.find(
+            f"SELECT * FROM TREE t INNER JOIN PARTITION p ON t.TREE_ID = p.PARENT_ID WHERE {cat} >= {low_fence} AND {cat} <= {high_fence} "
+            f"AND (PARTITION_NUM == 'None' OR PARTITION_NUM == 0);")
         values = get_values_for_cat(results, cat)
-        print("len raw", len(raw_values))
-        print("len filtered", len(values))
 
         vmin = min(values)
         vmax = max(values)
         bucket_size = (vmax - vmin) / num_buckets
 
         fig = plt.figure()
-        plt.hist(values, bins=[bucket_size * x for x in range(num_buckets)])
+        bins = [bucket_size * x for x in range(num_buckets)]
+        # plt.hist(np.clip(raw_values, bins[0], bins[-1]), bins=bins)
+        plt.hist(values, bins=bins)
+
         plt.xlabel(cat)
         plt.ylabel("Number of trees")
         fig_path = f"./figures/test_{cat}.png"
