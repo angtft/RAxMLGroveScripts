@@ -1242,7 +1242,9 @@ def main(args_list):
             results = db_object.find(f"{BASE_SQL_FIND_COMMAND} WHERE MODEL LIKE 'GTR%' AND OVERALL_NUM_ALIGNMENT_SITES > 0 AND {query};")
 
         print("Found {} trees".format(len(set([r["TREE_ID"] for r in results]))))
-        generate_sequences(results, args)
+
+        if len(results) > 0:
+            generate_sequences(results, args)
 
     db_object.close()
 
