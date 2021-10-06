@@ -79,7 +79,7 @@ int main( int argc, const char* argv[] )
     
     //std::cout << printer.print(orig_tree) << std::endl;
     //std::cout << "Tree diameter: " <<  << "\n";
-    std::cout << length(orig_tree) << " " << diameter(orig_tree) << "\n";
+    std::cout << length(orig_tree) << " " << diameter(orig_tree) << " " << height(orig_tree) << "\n";
 
     return 0;
 }

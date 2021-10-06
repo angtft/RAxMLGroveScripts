@@ -44,7 +44,7 @@ BASE_NODE_NAME = "taxon{}"
 ]"""
 COLUMNS = [
     ("TREE_ID", "CHAR(255)"), ("NUM_TAXA", "INT"), ("TREE_LENGTH", "FLOAT"), ("TREE_DIAMETER", "FLOAT"),
-    ("BRANCH_LENGTH_MEAN", "FLOAT"), ("BRANCH_LENGTH_VARIANCE", "FLOAT"),
+    ("TREE_HEIGHT", "FLOAT"), ("BRANCH_LENGTH_MEAN", "FLOAT"), ("BRANCH_LENGTH_VARIANCE", "FLOAT"),
     ("IS_INDELIBLE_COMPATIBLE", "INT"), ("OVERALL_NUM_ALIGNMENT_SITES", "INT"), ("OVERALL_NUM_PATTERNS", "INT"),
     ("OVERALL_GAPS", "FLOAT"), ("INVARIANT_SITES", "FLOAT"), ("RAXML_NG", "INT"),
     ("OVERALL_NUM_PARTITIONS", "INT"), ("MISSING_DATA_RATE", "FLOAT")   # TODO: missing data using presence/absence matrices
@@ -744,25 +744,16 @@ class GenesisTreeDiameter(object):  # TODO: Add genesis to ./tools/
             print(e)
         print("Done!")
 
-    def get_diam(self, tree_path1):
+    def get_len_and_diam_and_height(self, tree_path1):
         call = [self.executable_path, tree_path1]
 
         try:
             out = subprocess.check_output(call).decode()
-            return float(out.split()[-1])
+            values = out.split()
+            return float(values[-3]), float(values[-2]), float(values[-1])
         except Exception as e:
             print(e)
-            return 1
-
-    def get_len_and_diam(self, tree_path1):
-        call = [self.executable_path, tree_path1]
-
-        try:
-            out = subprocess.check_output(call).decode()
-            return float(out.split()[-2]), float(out.split()[-1])
-        except Exception as e:
-            print(e)
-            return -1, -1
+            return -1, -1, -1
 
 
 def init_args(arguments):
@@ -892,7 +883,7 @@ def get_tree_info(src_path, tree_id):
             diamcalc = -1
 
         if num_leaves < 20000:  # TODO: fix(?). trees above this size make genesis eat too much ram :'(
-            tree_len, tree_diam = diamcalc.get_len_and_diam(src_path)
+            tree_len, tree_diam, tree_height = diamcalc.get_len_and_diam_and_height(src_path)
         else:
             print("tree too big! num taxa: {}".format(num_leaves))
             global_num_of_too_big_trees += 1
@@ -902,6 +893,7 @@ def get_tree_info(src_path, tree_id):
         ret_dct["NUM_TAXA"] = num_leaves
         ret_dct["TREE_LENGTH"] = tree_len
         ret_dct["TREE_DIAMETER"] = tree_diam
+        ret_dct["TREE_HEIGHT"] = tree_height
         ret_dct["BRANCH_LENGTH_MEAN"] = statistics.mean(branch_length_list)
         ret_dct["BRANCH_LENGTH_VARIANCE"] = statistics.variance(branch_length_list)
         ret_dct["IS_INDELIBLE_COMPATIBLE"] = 1
