@@ -33,7 +33,6 @@ Table PARTITION
 
 
 
-For the figures below we filtered the outliers for each of the displayed columns using [Tukey's fences](https://en.wikipedia.org/wiki/Outlier#Tukey's_fences).
 
 ## Some Figures
 For the figures below we filtered the outliers for each of the displayed columns using [Tukey's fences](https://en.wikipedia.org/wiki/Outlier#Tukey's_fences).
