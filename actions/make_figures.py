@@ -130,6 +130,7 @@ def do_test(name):
         "NUM_TAXA",
         "TREE_DIAMETER",
         "TREE_LENGTH",
+        "TREE_HEIGHT",
         "BRANCH_LENGTH_VARIANCE",
         "ALPHA",
         "NUM_ALIGNMENT_SITES",

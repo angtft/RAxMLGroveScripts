@@ -2,7 +2,7 @@
 
 These are some example scripts using the [RAxMLGrove](https://github.com/angtft/RAxMLGrove).
 
-Until we come up with a more clever solution (as GitHub only allows single files to be below 100 MB), the SQLite database 'latest.db' contains only the trees generated with RAxML8. 
+Until we come up with a more clever solution (as GitHub only allows single files to be below 100 MB), the SQLite database 'latest.db' contains only the trees generated with RAxML8.
 The figures below were generated using that data only. The full database can be currently downloaded from [here](https://drive.google.com/file/d/1ucf2smX9XUdiOOgYP-GQ6COcYR-ujZaH/view?usp=sharing).
 
 
@@ -33,7 +33,8 @@ Table PARTITION
 
 
 
-## Some Figures
 For the figures below we filtered the outliers for each of the displayed columns using [Tukey's fences](https://en.wikipedia.org/wiki/Outlier#Tukey's_fences).
 
-<img src="./figures/test_NUM_TAXA.png" width="45%"></img><img src="./figures/test_TREE_DIAMETER.png" width="45%"></img><img src="./figures/test_TREE_LENGTH.png" width="45%"></img><img src="./figures/test_BRANCH_LENGTH_VARIANCE.png" width="45%"></img><img src="./figures/test_ALPHA.png" width="45%"></img><img src="./figures/test_NUM_ALIGNMENT_SITES.png" width="45%"></img><img src="./figures/test_GAPS.png" width="45%"></img><img src="./figures/test_RATE_AC.png" width="45%"></img><img src="./figures/test_RATE_AG.png" width="45%"></img><img src="./figures/test_RATE_AT.png" width="45%"></img><img src="./figures/test_RATE_CG.png" width="45%"></img><img src="./figures/test_RATE_CT.png" width="45%"></img><img src="./figures/test_RATE_GT.png" width="45%"></img><img src="./figures/test_FREQ_A.png" width="45%"></img><img src="./figures/test_FREQ_C.png" width="45%"></img><img src="./figures/test_FREQ_G.png" width="45%"></img><img src="./figures/test_FREQ_T.png" width="45%"></img>
+## Some Figures
+
+<img src="./figures/test_NUM_TAXA.png" width="45%"></img><img src="./figures/test_TREE_DIAMETER.png" width="45%"></img><img src="./figures/test_TREE_LENGTH.png" width="45%"></img><img src="./figures/test_TREE_HEIGHT.png" width="45%"></img><img src="./figures/test_BRANCH_LENGTH_VARIANCE.png" width="45%"></img><img src="./figures/test_ALPHA.png" width="45%"></img><img src="./figures/test_NUM_ALIGNMENT_SITES.png" width="45%"></img><img src="./figures/test_GAPS.png" width="45%"></img><img src="./figures/test_RATE_AC.png" width="45%"></img><img src="./figures/test_RATE_AG.png" width="45%"></img><img src="./figures/test_RATE_AT.png" width="45%"></img><img src="./figures/test_RATE_CG.png" width="45%"></img><img src="./figures/test_RATE_CT.png" width="45%"></img><img src="./figures/test_RATE_GT.png" width="45%"></img><img src="./figures/test_FREQ_A.png" width="45%"></img><img src="./figures/test_FREQ_C.png" width="45%"></img><img src="./figures/test_FREQ_G.png" width="45%"></img><img src="./figures/test_FREQ_T.png" width="45%"></img>
