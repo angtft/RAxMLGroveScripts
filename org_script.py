@@ -758,7 +758,7 @@ class GenesisTreeDiameter(object):  # TODO: Add genesis to ./tools/
 
 def init_args(arguments):
     parser = argparse.ArgumentParser()
-    parser.add_argument("operation", choices=["create", "add", "execute", "find", "generate"],
+    parser.add_argument("operation", choices=["create", "add", "execute", "find", "generate", "justgimmeatree"],
                         # TODO: rework 'find' command?
                         help="'create' iterates over a raxml out files archive parametrized with '-a' and "
                              "writes a database (db) file (the name can be parametrized with '-n'). Default db name "
@@ -833,12 +833,12 @@ def yes_no_prompt(message):
             print('Please answer with "y" (yes) or "n" (no)!')
 
 
-def download_trees(dest_path, result, amount=0):
+def download_trees(dest_path, result, amount=0, forced_out_dir=""):
     try:
         for i in range(amount):
             dct = result[i]
             tree_id = dct["TREE_ID"]
-            dir_path = os.path.join(dest_path, tree_id)
+            dir_path = os.path.join(dest_path, tree_id) if not forced_out_dir else os.path.join(dest_path, forced_out_dir)
             possible_files = [
                 "tree_best.newick", "tree_part.newick", "log_0.txt", "model_0.txt", "iqt.pr_ab_matrix"
             ]
@@ -948,7 +948,7 @@ def read_pr_ab_matrix(path):
 
 
 def assemble_sequences(path_list, out_dir, matrix_path="", tree_id=0):
-    out_path = os.path.join(out_dir, f"assembled_{tree_id}.fasta")
+    out_path = os.path.join(out_dir, f"assembled_sequences.fasta")  # f"assembled_{tree_id}.fasta"
     with open(out_path, "w+") as file:
         file.write("")
 
@@ -977,7 +977,7 @@ def assemble_sequences(path_list, out_dir, matrix_path="", tree_id=0):
             SeqIO.write(new_rec, file, "fasta")
 
 
-def generate_sequences(results, args):
+def generate_sequences(results, args, forced_out_dir=""):
     temp_tree_dir = os.path.join(os.path.abspath(args.out_dir))
     create_dir_if_needed(temp_tree_dir)
 
@@ -1021,8 +1021,13 @@ def generate_sequences(results, args):
         if args.set_seq_len:
             rand_tree_data["NUM_ALIGNMENT_SITES"] = int(args.set_seq_len)
 
-        download_trees(temp_tree_dir, [rand_tree_data], amount=1)
-        dl_tree_path = os.path.join(temp_tree_dir, rand_tree_data["TREE_ID"])
+        download_trees(temp_tree_dir, [rand_tree_data], amount=1, forced_out_dir=forced_out_dir)
+
+        if not forced_out_dir:
+            dl_tree_path = os.path.join(temp_tree_dir, rand_tree_data["TREE_ID"])
+        else:
+            dl_tree_path = os.path.join(temp_tree_dir, forced_out_dir)
+
         tree_path = os.path.join(dl_tree_path, BASE_TREE_NAME.format("best", BASE_TREE_FORMAT))
         if args.insert_matrix_gaps:
             pr_ab_matrix_path = os.path.join(dl_tree_path, "iqt.pr_ab_matrix")
@@ -1234,7 +1239,7 @@ def main(args_list):
                                amount=(int(amount_to_download) if amount_to_download else num_results))
                 """local_tree_copy(tree_dest_dir, result,
                                 amount=(int(amount_to_download) if amount_to_download else num_results))"""
-    elif args.operation == "generate":
+    elif args.operation == "generate" or args.operation == "justgimmeatree":
         if not args.filter_outliers:
             query = args.query if args.query else "MODEL LIKE 'GTR%' AND RATE_AC AND FREQ_A AND OVERALL_NUM_ALIGNMENT_SITES > 0"      # TODO: expand possible models
             results = db_object.find(f"{BASE_SQL_FIND_COMMAND} WHERE MODEL LIKE 'GTR%' AND RATE_AC AND FREQ_A AND OVERALL_NUM_ALIGNMENT_SITES > 0 AND {query};")
@@ -1274,7 +1279,10 @@ def main(args_list):
         print("Found {} trees".format(count_result_trees(results)))
 
         if len(results) > 0:
-            generate_sequences(results, args)
+            if args.operation == "generate":
+                generate_sequences(results, args)
+            else:
+                generate_sequences(results, args, forced_out_dir="default")
 
     db_object.close()
 
