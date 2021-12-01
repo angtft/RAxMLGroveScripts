@@ -8,6 +8,7 @@ out_seq
 out/*
 trees
 ./__pycache__
+actions/__pycache__
 temp/
 tools/dawg-1.2/build/
 .idea/

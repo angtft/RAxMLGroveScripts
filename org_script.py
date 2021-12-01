@@ -13,6 +13,9 @@ from io import StringIO
 from urllib.request import urlopen
 from Bio import Phylo, SeqIO, Seq, SeqRecord
 
+import actions.make_figures as fs
+
+
 global_max_tree_file_len = 0
 
 global_exception_counter = 0
@@ -28,26 +31,13 @@ BASE_TREE_FORMAT = "newick"
 BASE_TREE_NAME = "tree_{}.{}"
 BASE_NODE_NAME = "taxon{}"
 
-"""COLUMNS = [
-    ("TREE_ID", "CHAR(255)"), ("NUM_TAXA", "INT"), ("TREE_LENGTH", "FLOAT"), ("TREE_DIAMETER", "FLOAT"),
-    ("MODEL", "CHAR(50)"), ("ALPHA", "FLOAT"), ("RATE_AC", "FLOAT"), ("RATE_AG", "FLOAT"), ("RATE_AT", "FLOAT"),
-    ("RATE_CG", "FLOAT"), ("RATE_CT", "FLOAT"), ("RATE_GT", "FLOAT"), ("FREQ_A", "FLOAT"), ("FREQ_C", "FLOAT"),
-    ("FREQ_G", "FLOAT"), ("FREQ_T", "FLOAT"), ("BRANCH_LENGTH_MEAN", "FLOAT"), ("BRANCH_LENGTH_VARIANCE", "FLOAT"),
-    ("IS_INDELIBLE_COMPATIBLE", "INT"), ("NUM_ALIGNMENT_SITES", "INT"), ("NUM_PATTERNS", "INT"),
-    ("GAPS", "FLOAT"), ("INVARIANT_SITES", "FLOAT"), ("RAXML_NG", "INT"), ("DATA_TYPE", "CHAR(50)"),
-    ("RATE_STR", "cHAR(5000)"), ("FREQ_STR", "CHAR(2000)"), ("PARTITION_NUM", "INT"),
-    ("STATIONARY_FREQ_STR", "CHAR(100)"), ("PROPORTION_INVARIANT_SITES_STR", "CHAR(100)"),
-    ("AMONG_SITE_RATE_HETEROGENEITY_STR", "CHAR(100)"), ("ASCERTAINMENT_BIAS_CORRECTION_STR", "CHAR(100)"),
-    ("CUSTOM_CHAR_TO_STATE_MAPPING", "CHAR(100)")  # , ("IS_ON_TERRACE", "INT")
-    # TODO: get that is_on_terrace bool (newer versions of RAxML-NG?)
-    # TODO: test AA trees!
-]"""
+
 COLUMNS = [
     ("TREE_ID", "CHAR(255)"), ("NUM_TAXA", "INT"), ("TREE_LENGTH", "FLOAT"), ("TREE_DIAMETER", "FLOAT"),
     ("TREE_HEIGHT", "FLOAT"), ("BRANCH_LENGTH_MEAN", "FLOAT"), ("BRANCH_LENGTH_VARIANCE", "FLOAT"),
     ("IS_INDELIBLE_COMPATIBLE", "INT"), ("OVERALL_NUM_ALIGNMENT_SITES", "INT"), ("OVERALL_NUM_PATTERNS", "INT"),
     ("OVERALL_GAPS", "FLOAT"), ("INVARIANT_SITES", "FLOAT"), ("RAXML_NG", "INT"),
-    ("OVERALL_NUM_PARTITIONS", "INT"), ("MISSING_DATA_RATE", "FLOAT")   # TODO: missing data using presence/absence matrices
+    ("OVERALL_NUM_PARTITIONS", "INT"), ("MISSING_DATA_RATE", "FLOAT")
 ]
 
 PARTITION_COLUMNS = [
@@ -76,11 +66,10 @@ BASE_GITHUB_LINK = "https://raw.githubusercontent.com/angtft/RAxMLGrove/main/tre
 BASE_DB_FILE_NAME = "latest.db"
 BASE_FILE_DIR = os.path.dirname(__file__)
 BASE_OUT_DIR = os.path.join(BASE_FILE_DIR, "out")
+BASE_STAT_OUT_FILE = os.path.join(BASE_FILE_DIR, "statistics.csv")
 BASE_SEQ_FILE_FORMAT = "Phylip"  # TODO: maybe think some more about formats (since Phylip only allows taxon names up to 10 characters, and SeqGen doesn't output other formats?)
 BASE_DAWG_SEQ_FILE_FORMAT = "Fasta"
 BASE_SQL_FIND_COMMAND = "SELECT * FROM TREE t INNER JOIN PARTITION p ON t.TREE_ID = p.PARENT_ID"
-
-global_num_partitioned_trees = 0  # TODO: remove this!
 
 
 def get_tukeys_fences(lst):
@@ -262,6 +251,10 @@ class Dawg(object):
 
 
 class SeqGen(object):
+    """
+    We also use Seq-Gen here (https://github.com/rambaut/Seq-Gen)
+    """
+
     def __init__(self, path):     # TODO: fix out paths (for Dawg as well)
         self.path = path
         self.seed = -1
@@ -414,6 +407,11 @@ class BetterTreeDataBase(object):
 
 
 class RaxmlNGLogReader(object):
+    """
+    Used to read the log and model files produced by RAxML-NG
+    and extract the information needed for the columns of the database ("create")
+    """
+
     def __init__(self, path, model_path):
         self.path = path
         self.partitions_dict = {}
@@ -550,6 +548,10 @@ class RaxmlNGLogReader(object):
 
 
 class OldRaxmlReader(object):
+    """
+    Used to read the log of a RAxML file and extract the information needed for the columns of the database ("create")
+    """
+
     def __init__(self, path):
         self.path = path
         self.partitions_dict = {}
@@ -758,15 +760,16 @@ class GenesisTreeDiameter(object):  # TODO: Add genesis to ./tools/
 
 def init_args(arguments):
     parser = argparse.ArgumentParser()
-    parser.add_argument("operation", choices=["create", "add", "execute", "find", "generate", "justgimmeatree"],
+    parser.add_argument("operation", choices=["create", "add", "execute", "find", "generate", "stats", "justgimmeatree"],
                         # TODO: rework 'find' command?
-                        help="'create' iterates over a raxml out files archive parametrized with '-a' and "
+                        help="'create' iterates over a RAxML out files archive parametrized with '-a' and "
                              "writes a database (db) file (the name can be parametrized with '-n'). Default db name "
                              f"{BASE_DB_FILE_NAME}.\n"
                              "'add' adds trees from archive path to the db.\n"
                              "'execute' executes a command parametrized with '-c' on the db.\n"
                              "'find' tries to find trees in the db satisfying the conditions set with '-q'.\n"
-                             "'generate' generates sequences with Dawg using randomly drawn trees from the db.")
+                             "'generate' generates sequences with Dawg using randomly drawn trees from the db.\n"
+                             "'stats' prints some statistical information about the database entries.")
     parser.add_argument("-n", "--db-name", help=f"Sets the name of the database file. If not set, this tool will "
                                                 f"try to create/access the '{BASE_DB_FILE_NAME}' file.")
     parser.add_argument("-a", "--archive-path", help="Sets the raxml out files archive path. (create)")
@@ -774,6 +777,8 @@ def init_args(arguments):
     parser.add_argument("-q", "--query", help="Part of the statement after the 'WHERE' clause "
                                               "to find trees in the db. CAUTION: We do not sanitize, "
                                               "don't break your own database...")
+    parser.add_argument("--list", action='store_true', help="Lists all found trees, "
+                                                            "without asking for download. (find)")
     parser.add_argument("--num-sequences", default=1, help="Amount of sequences to be generated. To generate "
                                                            "a sequence we randomly draw a tree from the db (can be "
                                                            "used with -q) and run a sequence generator with that tree. "
@@ -809,6 +814,8 @@ def init_args(arguments):
     if args.operation in ["find", "generate"] and args.out_dir == BASE_OUT_DIR:
         print(f"No output directory specified. Using default '{BASE_OUT_DIR}'.")
         create_dir_if_needed(BASE_OUT_DIR)
+    if args.list and not args.operation == "find":
+        parser.error("'--list' may only be used with 'find'")
     if args.seed:
         try:
             s = int(args.seed)
@@ -869,6 +876,9 @@ def count_tree_leaves(clade):
 
 
 def get_tree_info(src_path, tree_id):
+    """
+    Creates a dict with statistical information about a tree with the help of Genesis
+    """
     global global_num_of_too_big_trees
 
     num_leaves = 0
@@ -978,10 +988,18 @@ def assemble_sequences(path_list, out_dir, matrix_path="", tree_id=0):
 
 
 def generate_sequences(results, args, forced_out_dir=""):
+    """
+    Generates sequences based on the result dict passed using Dawg or Seq-Gen.
+    If args.seed is set, it will be used for the generators.
+    If args.insert_matrix_gaps is set, the script will first generate MSAs for every partition, then assemble
+        them into a single MSA file
+    """
+
     temp_tree_dir = os.path.join(os.path.abspath(args.out_dir))
     create_dir_if_needed(temp_tree_dir)
 
     if args.generator == "seq-gen":
+        raise ValueError("seq-gen currently not working!")
         generator = SeqGen(os.path.join(BASE_FILE_DIR, "tools", "Seq-Gen-1.3.4"))
     else:
         generator = Dawg(os.path.join(BASE_FILE_DIR, "tools", "dawg-1.2"))
@@ -1048,14 +1066,16 @@ def generate_sequences(results, args, forced_out_dir=""):
 
 
 def hopefully_somewhat_better_directory_crawl(root_path, db_object, add_new_files_only=False, local=False):
+    """
+    Crawls the RAxML Grove directory and creates a dict with tree information for every job (for "create" command)
+    """
+
     global global_tree_dict_list
     global global_part_list_dict
 
     global global_exception_counter
     global global_num_of_checked_jobs
     global global_max_tree_file_len
-
-    global global_num_partitioned_trees  # TODO: remove this
 
     files = os.listdir(root_path)
 
@@ -1106,9 +1126,6 @@ def hopefully_somewhat_better_directory_crawl(root_path, db_object, add_new_file
             tree_info["OVERALL_NUM_PATTERNS"] = 0
             tree_info["OVERALL_GAPS"] = 0
 
-            if len(partitions_info) > 1:
-                global_num_partitioned_trees += 1
-
             i = 0
             for key in partitions_info:
                 temp_dict = {
@@ -1150,9 +1167,6 @@ def hopefully_somewhat_better_directory_crawl(root_path, db_object, add_new_file
             tree_info["OVERALL_NUM_PATTERNS"] = 0
             tree_info["OVERALL_GAPS"] = 0
 
-            if len(partitions_info) > 1:
-                global_num_partitioned_trees += 1
-
             i = 0
             for key in partitions_info:
                 temp_dict = {
@@ -1193,6 +1207,74 @@ def count_result_trees(results):
     return len(set([r["TREE_ID"] for r in results]))
 
 
+def print_statistics(db_object):
+    if not os.path.isfile(fs.CSV_PATH):
+        fs.export_to_csv(db_object.db_path)
+
+    cat_float_values = {}
+    cat_str_values = {}
+    with open(fs.CSV_PATH) as file:
+        cats = []
+        for line in file:
+            line = line.rstrip()
+            values = line.split(",")
+            if not cats:
+                cats = values
+                continue
+
+            for i in range(len(cats)):
+                value = values[i]
+                if value == "None" or cats[i] in ["TREE_ID", "PARENT_ID", "IS_INDELIBLE_COMPATIBLE", "RAXML_NG",
+                                                  "PROPORTION_INVARIANT_SITES_STR", "PARTITION_NUM"]:
+                    continue
+
+                if cats[i] in ["MODEL", "DATA_TYPE"]:
+                    if cats[i] in cat_str_values:
+                        cat_str_values[cats[i]].append(value)
+                    else:
+                        cat_str_values[cats[i]] = [value]
+                else:
+                    try:
+                        cvalue = float(value)
+                        if cats[i] in cat_float_values:
+                            cat_float_values[cats[i]].append(cvalue)
+                        else:
+                            cat_float_values[cats[i]] = [cvalue]
+                    except:
+                        pass
+
+    for cat in cat_float_values:
+        lower_fence, upper_fence = get_tukeys_fences(cat_float_values[cat])
+        filtered_values = list(filter(lambda x: lower_fence <= x <= upper_fence, cat_float_values[cat]))
+
+        print(f"{cat}:\n"
+              f"    min {min(cat_float_values[cat])} max {max(cat_float_values[cat])}\n"
+              f"    mean {statistics.mean(cat_float_values[cat])} "
+              f"median {statistics.median(cat_float_values[cat])}")
+
+        if len(filtered_values) > 0:
+            print(f"  without outliers:\n"
+                  f"    lower/upper fence {(lower_fence, upper_fence)}\n"
+                  f"    min {min(filtered_values)} max {max(filtered_values)}\n"
+                  f"    mean {statistics.mean(filtered_values)} "
+                  f"median {statistics.median(filtered_values)}\n"
+                  )
+
+    for cat in cat_str_values:
+        str_buckets = {}
+        str_buckets_list = []
+        for entry in cat_str_values[cat]:
+            if entry in str_buckets:
+                str_buckets[entry] += 1
+            else:
+                str_buckets[entry] = 1
+        for key in str_buckets:
+            str_buckets_list.append((key, str_buckets[key], "{0:.2f}%".format(str_buckets[key] * 100 / len(cat_str_values[cat]))))
+        str_buckets_list.sort(key=lambda x: x[1], reverse=True)
+
+        print(f"{cat}: {str_buckets_list}\n")
+
+
 def main(args_list):
     args = init_args(args_list)
 
@@ -1203,7 +1285,7 @@ def main(args_list):
         archive_path = args.archive_path
 
         hopefully_somewhat_better_directory_crawl(archive_path, db_object, add_new_files_only=(args.operation == "add"),
-                                                  local=False)  # TODO: change local
+                                                  local=False)
 
         db_object.fill_database(global_tree_dict_list, global_part_list_dict)
 
@@ -1218,27 +1300,33 @@ def main(args_list):
         printed_results = 0
         printed_dcts = {}
 
-        for dct in result:
-            if dct["TREE_ID"] not in printed_dcts:
-                print(dct)
-                printed_dcts[dct["TREE_ID"]] = 1
-                printed_results += 1
+        if not args.list:
+            for dct in result:
+                if dct["TREE_ID"] not in printed_dcts:
+                    print(dct)
+                    printed_dcts[dct["TREE_ID"]] = 1
+                    printed_results += 1
 
-            if printed_results >= 10:
-                print(f"...({num_results - printed_results} more)...")
-                break
+                if printed_results >= 10:
+                    print(f"...({num_results - printed_results} more)...")
+                    break
 
-        print("\nNumber of results: {}".format(num_results))
+            print("\nNumber of results: {}".format(num_results))
 
-        if num_results > 0:
-            ask_download = yes_no_prompt("Would you like to download these trees?")
-            if ask_download:
-                tree_dest_dir = input('Destination (default cwd): ')
-                amount_to_download = input('How many trees to download (default all): ')
-                download_trees(tree_dest_dir, result,
-                               amount=(int(amount_to_download) if amount_to_download else num_results))
-                """local_tree_copy(tree_dest_dir, result,
-                                amount=(int(amount_to_download) if amount_to_download else num_results))"""
+            if num_results > 0:
+                ask_download = yes_no_prompt("Would you like to download these trees?")
+                if ask_download:
+                    tree_dest_dir = input('Destination (default cwd): ')
+                    amount_to_download = input('How many trees to download (default all): ')
+                    download_trees(tree_dest_dir, result,
+                                   amount=(int(amount_to_download) if amount_to_download else num_results))
+                    """local_tree_copy(tree_dest_dir, result,
+                                    amount=(int(amount_to_download) if amount_to_download else num_results))"""
+        else:
+            for dct in result:
+                if dct["TREE_ID"] not in printed_dcts:
+                    print(dct)
+                    printed_dcts[dct["TREE_ID"]] = 1
     elif args.operation == "generate" or args.operation == "justgimmeatree":
         if not args.filter_outliers:
             query = args.query if args.query else "MODEL LIKE 'GTR%' AND RATE_AC AND FREQ_A AND OVERALL_NUM_ALIGNMENT_SITES > 0"      # TODO: expand possible models
@@ -1283,6 +1371,8 @@ def main(args_list):
                 generate_sequences(results, args)
             else:
                 generate_sequences(results, args, forced_out_dir="default")
+    elif args.operation == "stats":
+        print_statistics(db_object)
 
     db_object.close()
 
@@ -1291,6 +1381,5 @@ if __name__ == "__main__":
     if len(sys.argv) > 1:
         main(sys.argv[1:])
 
-        print("Num part trees: {}".format(global_num_partitioned_trees))
     else:
         main(["-h"])
