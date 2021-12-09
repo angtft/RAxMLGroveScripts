@@ -152,6 +152,19 @@ def create_dir_if_needed(path):
         pass
 
 
+def find_unused_tree_folder_name(root_dir_path, name):
+    counter = 0
+    while True:     # TODO: JPL ICS would not approve!
+        if counter == 0:
+            suggested_name = name
+        else:
+            suggested_name = f"{name}_{counter}"
+        if not os.path.isdir(os.path.join(root_dir_path, suggested_name)):
+            return suggested_name
+        else:
+            counter += 1
+
+
 def local_tree_copy(dest_dir, results, amount=1):
     if type(results) is list:
         tree_pile = results
@@ -788,6 +801,7 @@ def init_args(arguments):
                                                                      "specified using '-n'. (create)")
     parser.add_argument("--seq-len", default=8000, help="Default generated sequence length if it is not specified in "
                                                         "the tree log data. (generate)")
+    # TODO: maybe reintroduce this argument at some point when it is clear how to handle edge cases...
     parser.add_argument("--set-seq-len", help="CURRENTLY NOT WORKING! Sets the generated sequence length IGNORING the sequence length "
                                               "specified in the tree log data. (generate)")
     parser.add_argument("--filter-outliers", action='store_true', help="Filters trees with uncommon characteristics "
@@ -795,6 +809,9 @@ def init_args(arguments):
     parser.add_argument("--insert-matrix-gaps", action="store_true", help="Uses the presence/absence matrices to "
                                                                           "insert gaps into the simulated sequences. "
                                                                           "(generate)")
+    parser.add_argument("--use-all-trees", action="store_true", help="Forces the usage of all found trees instead of "
+                                                                     "pulling trees randomly from the set of found "
+                                                                     "trees. (generate)")
     parser.add_argument("-g", "--generator", choices=["dawg", "seq-gen"], default="dawg",
                         help="Selects the sequence generator used. (generate)")
     parser.add_argument("-o", "--out-dir", default=BASE_OUT_DIR,
@@ -1027,10 +1044,13 @@ def generate_sequences(results, args, forced_out_dir=""):
             print(e)
             del grouped_results[key]
 
+    key_list = list(grouped_results.keys())
     # TODO: think of ways to fix the following
     for i in range(int(args.num_sequences)):
-        rand_key = random.choice(list(grouped_results.keys()))   # TODO: currently we just randomly pick results out of the whole set. however, it could be better to
-                                                                 #       iterate through all keys if num_sequences > len(grouped_results)
+        if not args.use_all_trees:
+            rand_key = random.choice(key_list)
+        else:
+            rand_key = key_list[i % len(key_list)]
         rand_tree_data = grouped_results[rand_key][0]
         print(f"\nRun {i}. Selected tree:\n {rand_tree_data}")
 
@@ -1039,12 +1059,14 @@ def generate_sequences(results, args, forced_out_dir=""):
         if args.set_seq_len:
             rand_tree_data["NUM_ALIGNMENT_SITES"] = int(args.set_seq_len)
 
-        download_trees(temp_tree_dir, [rand_tree_data], amount=1, forced_out_dir=forced_out_dir)
-
+        tree_folder_name = forced_out_dir
         if not forced_out_dir:
-            dl_tree_path = os.path.join(temp_tree_dir, rand_tree_data["TREE_ID"])
+            tree_folder_name = find_unused_tree_folder_name(temp_tree_dir, rand_tree_data["TREE_ID"])
+            dl_tree_path = os.path.join(temp_tree_dir, tree_folder_name)
         else:
             dl_tree_path = os.path.join(temp_tree_dir, forced_out_dir)
+
+        download_trees(temp_tree_dir, [rand_tree_data], amount=1, forced_out_dir=tree_folder_name)
 
         tree_path = os.path.join(dl_tree_path, BASE_TREE_NAME.format("best", BASE_TREE_FORMAT))
         if args.insert_matrix_gaps:
