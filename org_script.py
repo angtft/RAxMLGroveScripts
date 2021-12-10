@@ -1,5 +1,7 @@
 #!/usr/bin/env python3
 
+import collections
+import json
 import sys
 import os
 import sqlite3
@@ -29,6 +31,7 @@ global_node_counter = 0
 global_tree_name_dict = {}
 BASE_TREE_FORMAT = "newick"
 BASE_TREE_NAME = "tree_{}.{}"
+BASE_TREE_DICT_NAME = "tree_dict.json"
 BASE_NODE_NAME = "taxon{}"
 
 
@@ -102,6 +105,9 @@ def get_tukeys_fences(lst):
 
 
 def traverse_and_rename_nodes(clade):
+    """
+    Currently not used (?). Function is supposed to substitute taxon names in the tree.
+    """
     global global_node_counter
     global global_tree_name_dict
     if clade.name:
@@ -115,6 +121,10 @@ def traverse_and_rename_nodes(clade):
 
 
 def copy_tree_file(src_path, dest_path):
+    """
+    Copies trees from source to destination paths. Used to anonymize trees as well at some point
+    (currently RAxMLGrove trees are already anonymized).
+    """
     global global_node_counter
     global global_tree_name_dict
     global_tree_name_dict = {}
@@ -792,8 +802,8 @@ def init_args(arguments):
                                               "don't break your own database...")
     parser.add_argument("--list", action='store_true', help="Lists all found trees, "
                                                             "without asking for download. (find)")
-    parser.add_argument("--num-sequences", default=1, help="Amount of sequences to be generated. To generate "
-                                                           "a sequence we randomly draw a tree from the db (can be "
+    parser.add_argument("--num-sequences", default=1, help="Amount of MSA to be generated. To generate "
+                                                           "a MSA we randomly draw a tree from the db (can be "
                                                            "used with -q) and run a sequence generator with that tree. "
                                                            "(generate)")
     parser.add_argument("--local", default=True, help="FOR TESTING PURPOSES (don't use it).")
@@ -815,9 +825,9 @@ def init_args(arguments):
     parser.add_argument("-g", "--generator", choices=["dawg", "seq-gen"], default="dawg",
                         help="Selects the sequence generator used. (generate)")
     parser.add_argument("-o", "--out-dir", default=BASE_OUT_DIR,
-                        help=f"Output directory (default: {BASE_OUT_DIR}).")
+                        help=f"Output directory (default: {BASE_OUT_DIR}). (find, generate)")
     parser.add_argument("--seed", help="Sets the seed for the random number generator of this script, "
-                                       "as well as the sequence generators.")
+                                       "as well as the sequence generators. (generate)")
 
     args = parser.parse_args(arguments)
     if args.operation == "create" and not args.archive_path:
@@ -857,7 +867,19 @@ def yes_no_prompt(message):
             print('Please answer with "y" (yes) or "n" (no)!')
 
 
-def download_trees(dest_path, result, amount=0, forced_out_dir=""):
+def save_tree_dict(path, result):
+    try:
+        json_obj = json.dumps(result, indent=4)
+        out_path = os.path.join(path, BASE_TREE_DICT_NAME)
+        with open(out_path, "w+") as file:
+            file.write(json_obj)
+    except Exception as e:
+        print(e)
+        print(f"Error: could not export tree dict to file: {path}")
+
+
+def download_trees(dest_path, result, grouped_result={}, amount=0, forced_out_dir=""):
+    returned_paths = []
     try:
         for i in range(amount):
             dct = result[i]
@@ -867,6 +889,8 @@ def download_trees(dest_path, result, amount=0, forced_out_dir=""):
                 "tree_best.newick", "tree_part.newick", "log_0.txt", "model_0.txt", "iqt.pr_ab_matrix"
             ]
             create_dir_if_needed(dir_path)
+            if grouped_result:
+                save_tree_dict(dir_path, grouped_result)
 
             for file_name in possible_files:
                 try:
@@ -876,8 +900,11 @@ def download_trees(dest_path, result, amount=0, forced_out_dir=""):
                         output.write(content)
                 except Exception as e:
                     pass
+            returned_paths.append(dir_path)
     except Exception as e:
         print("Error while downloading: {}".format(e))
+
+    return returned_paths
 
 
 def count_tree_leaves(clade):
@@ -944,6 +971,10 @@ def file_exists(path, substr):
 
 
 def read_pr_ab_matrix(path):
+    """
+    Reads the presence/absence matrix and returns the number of 0s and 1s
+    as well as the matrix itself (currently as list of lists...)
+    """
     with open(path) as file:
         first_line = True
         num_bits = 0
@@ -974,7 +1005,22 @@ def read_pr_ab_matrix(path):
     return num_0, num_1, matrix
 
 
+def group_partitions_in_result_dicts(results):
+    grouped_results = {}
+    for result in results:
+        tree_id = result["TREE_ID"]
+        if tree_id in grouped_results:
+            grouped_results[tree_id].append(result)
+        else:
+            grouped_results[tree_id] = [result]
+    return grouped_results
+
+
 def assemble_sequences(path_list, out_dir, matrix_path="", tree_id=0):
+    """
+    Concatenates multiple MSAs into a single file. We use this to create a big MSA file out of separately generated
+    per-partition-MSAs.
+    """
     out_path = os.path.join(out_dir, f"assembled_sequences.fasta")  # f"assembled_{tree_id}.fasta"
     with open(out_path, "w+") as file:
         file.write("")
@@ -1006,11 +1052,12 @@ def assemble_sequences(path_list, out_dir, matrix_path="", tree_id=0):
 
 def generate_sequences(results, args, forced_out_dir=""):
     """
-    Generates sequences based on the result dict passed using Dawg or Seq-Gen.
+    Generates sequences based on the result dict, using Dawg or Seq-Gen.
     If args.seed is set, it will be used for the generators.
     If args.insert_matrix_gaps is set, the script will first generate MSAs for every partition, then assemble
         them into a single MSA file
     """
+    returned_paths = []
 
     temp_tree_dir = os.path.join(os.path.abspath(args.out_dir))
     create_dir_if_needed(temp_tree_dir)
@@ -1027,15 +1074,12 @@ def generate_sequences(results, args, forced_out_dir=""):
 
     print(f"Using {args.generator}.")
 
-    grouped_results = {}
-    for result in results:
-        tree_id = result["TREE_ID"]
-        if tree_id in grouped_results:
-            grouped_results[tree_id].append(result)
-        else:
-            grouped_results[tree_id] = [result]
+    grouped_results = group_partitions_in_result_dicts(results)
 
     for key in list(grouped_results.keys()):
+        # Currently we only support DNA with GTR model, and since our query would filter other partitions
+        # some data sets would potentially have partitions missing (e.g., when different partitions use different
+        # data types). Here we remove data sets with an incomplete set of partitions.
         try:
             num_parts = grouped_results[key][0]["OVERALL_NUM_PARTITIONS"]
             if num_parts != len(grouped_results[key]):
@@ -1047,6 +1091,7 @@ def generate_sequences(results, args, forced_out_dir=""):
     key_list = list(grouped_results.keys())
     # TODO: think of ways to fix the following
     for i in range(int(args.num_sequences)):
+        # Select tree to generate sequences for
         if not args.use_all_trees:
             rand_key = random.choice(key_list)
         else:
@@ -1054,21 +1099,24 @@ def generate_sequences(results, args, forced_out_dir=""):
         rand_tree_data = grouped_results[rand_key][0]
         print(f"\nRun {i}. Selected tree:\n {rand_tree_data}")
 
+        # Set sequence length
         if rand_tree_data["NUM_ALIGNMENT_SITES"] == "None":
             rand_tree_data["NUM_ALIGNMENT_SITES"] = int(args.seq_len)
         if args.set_seq_len:
             rand_tree_data["NUM_ALIGNMENT_SITES"] = int(args.set_seq_len)
 
+        # Download tree
         tree_folder_name = forced_out_dir
         if not forced_out_dir:
             tree_folder_name = find_unused_tree_folder_name(temp_tree_dir, rand_tree_data["TREE_ID"])
             dl_tree_path = os.path.join(temp_tree_dir, tree_folder_name)
         else:
             dl_tree_path = os.path.join(temp_tree_dir, forced_out_dir)
-
-        download_trees(temp_tree_dir, [rand_tree_data], amount=1, forced_out_dir=tree_folder_name)
-
+        returned_paths = download_trees(temp_tree_dir, [rand_tree_data], grouped_result=grouped_results[rand_key],
+                                        amount=1, forced_out_dir=tree_folder_name)
         tree_path = os.path.join(dl_tree_path, BASE_TREE_NAME.format("best", BASE_TREE_FORMAT))
+
+        # Get presence/absence matrix path if needed
         if args.insert_matrix_gaps:
             pr_ab_matrix_path = os.path.join(dl_tree_path, "iqt.pr_ab_matrix")
         else:
@@ -1077,6 +1125,7 @@ def generate_sequences(results, args, forced_out_dir=""):
         seq_part_paths = []
         partitions = grouped_results[rand_key]
 
+        # Generate per-partition MSAs
         for p_num in range(len(partitions)):
             seq_part_path = os.path.join(dl_tree_path, f"seq_{i}.part{p_num}.{BASE_DAWG_SEQ_FILE_FORMAT}")  # TODO: do something with the formats...
 
@@ -1084,7 +1133,10 @@ def generate_sequences(results, args, forced_out_dir=""):
             generator.execute(tree_path, seq_part_path, part)
             seq_part_paths.append(seq_part_path)
 
+        # Assemble MSAs
         assemble_sequences(seq_part_paths, out_dir=dl_tree_path, matrix_path=pr_ab_matrix_path, tree_id=rand_tree_data["TREE_ID"])
+
+    return grouped_results, returned_paths
 
 
 def hopefully_somewhat_better_directory_crawl(root_path, db_object, add_new_files_only=False, local=False):
@@ -1298,17 +1350,43 @@ def print_statistics(db_object):
 
 
 def main(args_list):
+    """
+    Main function. We do stuff depending on the selected operation.
+    Throughout most of the code, db_object will contain our SQLite database and answer queries. The returned
+    values will be called "results". results are to contain a list of dicts of trees with their respective
+    attributes. We use two tables:
+        TREE for the overall tree information
+        PARTITION to store information of different partitions for one TREE entry
+    So we have a many-to-one relation between PARTITIONs and TREEs. When we return joined results, we will have a
+    dict for every partition in the database, which is why we usually group results
+    (with group_partitions_in_result_dicts()) by tree ids before usage.
+
+    The operations
+        "create", "add", "execute" were made for database creation/manipulation, and should probably not
+    be very interesting to most users.
+        "find" will try to find data sets according to the passed query "-q query".
+        "generate" will find data sets which were inferred under the GTR substitution model, download the data sets,
+    and generate sequences for these sets (according to the other arguments/flags)
+        "stats" prints statistical information about the data sets in the database.
+    """
+
     args = init_args(args_list)
 
     db_path = args.db_name if args.db_name else BASE_DB_FILE_NAME
     db_object = BetterTreeDataBase(db_path, force_rewrite=args.force_rewrite)
 
+    # We return found data sets / data sets which were used for the generation of MSAs, in case main() is called
+    # directly. returned_paths contains the directory paths the data sets were downloaded to.
+    returned_results = {}
+    returned_paths = []
+
     if args.operation == "create" or args.operation == "add":
         archive_path = args.archive_path
 
+        # Crawl the RAxMLGrove archive, parse RAxML output files, fill global_tree_dict_list and global_part_list_dict,
+        # write them into a SQLite database afterwards.
         hopefully_somewhat_better_directory_crawl(archive_path, db_object, add_new_files_only=(args.operation == "add"),
                                                   local=False)
-
         db_object.fill_database(global_tree_dict_list, global_part_list_dict)
 
         print("\nExceptions: {}".format(global_exception_counter))
@@ -1317,6 +1395,7 @@ def main(args_list):
         db_object.execute_command(args.command)
     elif args.operation == "find":
         result = db_object.find(f"SELECT * FROM TREE t INNER JOIN PARTITION p ON t.TREE_ID = p.PARENT_ID WHERE {args.query};")
+        grouped_result = group_partitions_in_result_dicts(result)
         num_results = count_result_trees(result)
 
         printed_results = 0
@@ -1324,7 +1403,8 @@ def main(args_list):
 
         if not args.list:
             for dct in result:
-                if dct["TREE_ID"] not in printed_dcts:
+                current_tree_id = dct["TREE_ID"]
+                if current_tree_id not in printed_dcts:
                     print(dct)
                     printed_dcts[dct["TREE_ID"]] = 1
                     printed_results += 1
@@ -1338,9 +1418,10 @@ def main(args_list):
             if num_results > 0:
                 ask_download = yes_no_prompt("Would you like to download these trees?")
                 if ask_download:
-                    tree_dest_dir = input('Destination (default cwd): ')
+                    tree_dest_dir = args.out_dir or input('Destination (default cwd): ')
+
                     amount_to_download = input('How many trees to download (default all): ')
-                    download_trees(tree_dest_dir, result,
+                    returned_paths = download_trees(tree_dest_dir, result, grouped_result=grouped_result,
                                    amount=(int(amount_to_download) if amount_to_download else num_results))
                     """local_tree_copy(tree_dest_dir, result,
                                     amount=(int(amount_to_download) if amount_to_download else num_results))"""
@@ -1349,6 +1430,9 @@ def main(args_list):
                 if dct["TREE_ID"] not in printed_dcts:
                     print(dct)
                     printed_dcts[dct["TREE_ID"]] = 1
+
+        returned_results = grouped_result
+
     elif args.operation == "generate" or args.operation == "justgimmeatree":
         if not args.filter_outliers:
             query = args.query if args.query else "MODEL LIKE 'GTR%' AND RATE_AC AND FREQ_A AND OVERALL_NUM_ALIGNMENT_SITES > 0"      # TODO: expand possible models
@@ -1390,18 +1474,19 @@ def main(args_list):
 
         if len(results) > 0:
             if args.operation == "generate":
-                generate_sequences(results, args)
+                returned_results, returned_paths = generate_sequences(results, args)
             else:
-                generate_sequences(results, args, forced_out_dir="default")
+                returned_results, returned_paths = generate_sequences(results, args, forced_out_dir="default")
     elif args.operation == "stats":
         print_statistics(db_object)
 
     db_object.close()
 
+    return returned_results, returned_paths
+
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
         main(sys.argv[1:])
-
     else:
         main(["-h"])
