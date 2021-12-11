@@ -67,7 +67,7 @@ SUBSTITUTION_MODELS = {
 
 BASE_GITHUB_LINK = "https://raw.githubusercontent.com/angtft/RAxMLGrove/main/trees/{}/{}"
 BASE_DB_FILE_NAME = "latest.db"
-BASE_FILE_DIR = os.path.dirname(__file__)
+BASE_FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_OUT_DIR = os.path.join(BASE_FILE_DIR, "out")
 BASE_STAT_OUT_FILE = os.path.join(BASE_FILE_DIR, "statistics.csv")
 BASE_SEQ_FILE_FORMAT = "Phylip"  # TODO: maybe think some more about formats (since Phylip only allows taxon names up to 10 characters, and SeqGen doesn't output other formats?)
