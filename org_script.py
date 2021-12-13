@@ -802,7 +802,7 @@ def init_args(arguments):
                                               "don't break your own database...")
     parser.add_argument("--list", action='store_true', help="Lists all found trees, "
                                                             "without asking for download. (find)")
-    parser.add_argument("--num-sequences", default=1, help="Amount of MSA to be generated. To generate "
+    parser.add_argument("--num-msas", default=1, help="Number of MSAs to be generated. To generate "
                                                            "a MSA we randomly draw a tree from the db (can be "
                                                            "used with -q) and run a sequence generator with that tree. "
                                                            "(generate)")

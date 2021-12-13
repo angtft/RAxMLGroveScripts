@@ -26,19 +26,19 @@ pip install biopython numpy pandas matplotlib
 The script will print a subset of the trees found and ask for user input to decide whether some, or all, of the trees should be downloaded. To list all of
 the trees found, without requiring the user input, the flag ”–-list” can be used.
 
-2. To generate 10 sequences (using [Dawg](https://github.com/reedacartwright/dawg)) with incomplete data for data sets which have a missing data rate above 80%, the following command can be used:
+2. To generate 10 MSAs (using [Dawg](https://github.com/reedacartwright/dawg)) with incomplete data for data sets which have a missing data rate above 80%, the following command can be used:
 ```
-./org_script.py generate -q "MISSING_DATA_RATE != 'None' and MISSING_DATA_RATE > 0.8" --num-sequences 10 --insert-matrix-gaps
+./org_script.py generate -q "MISSING_DATA_RATE != 'None' and MISSING_DATA_RATE > 0.8" --num-msas 10 --insert-matrix-gaps
 ```
-The script will then search for data sets satisfying these conditions, randomly select 10 of them and generate sequences using Dawg (default) for every
+The script will then search for data sets satisfying these conditions, randomly select 10 of them and generate MSAs using Dawg (default) for every
 data set. There is a chance that the same data set will be selected multiple times. This will however, with near certainty, lead to different generated 
 sequences since the sequence generators Dawg and [Seq-Gen](https://github.com/rambaut/Seq-Gen) will use different seeds for their random number generator on every execution. To set a specific 
 seed use the argument "--seed s".
 
-3. To generate 10 sequences using data sets which are not considered outliers (i.e., number of taxa, tree diameter, branch length variance, number of patterns, percentage of
+3. To generate 10 MSAs using data sets which are not considered outliers (i.e., number of taxa, tree diameter, branch length variance, number of patterns, percentage of
 gaps, model rates and base frequencies are not outliers):
 ```
-./org_script.py generate --num-sequences 10 --filter-outliers
+./org_script.py generate --num-msas 10 --filter-outliers
 ```
 
 4. To print statistical information about the columns contained in RAxMLGrove:
