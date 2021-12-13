@@ -18,7 +18,7 @@ pip install biopython numpy pandas matplotlib
 ```
 
 
-## Example usage:
+## Example usage
 1. To find and download data sets with a number of taxa above 100 generated using the GTR model, the following command can be used:
 ```
 ./org_script.py find -q "NUM_TAXA > 100 and MODEL = 'GTR'"
@@ -71,6 +71,7 @@ Table PARTITION
 ("CUSTOM_CHAR_TO_STATE_MAPPING", "CHAR(100)"), ("PARENT_ID", "INT")
 ```
 
+For more information please refer to the [wiki](https://github.com/angtft/RAxMLGroveScripts/wiki/Usage).
 
 
 
