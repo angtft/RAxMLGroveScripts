@@ -26,3 +26,19 @@ Out.Block.After =
 """
  
 """
+
+
+#GapModel = {"NB", "NB"}
+#GapParams =
+#{
+#    {1, 0.5}, #insertion model
+#    {2, 0.5}  #deletion model
+#}
+
+GapModel = {"US"}
+GapParams =
+{
+    0.7, #probability of an indel of size 1
+    0.2, #probability of an indel of size 2
+    0.1  #probability of an indel of size 3
+}

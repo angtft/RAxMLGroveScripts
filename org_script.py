@@ -26,6 +26,7 @@ global_num_of_checked_jobs = 0
 global_tree_dict_list = []
 global_part_list_dict = {}
 global_db_object = None
+global_use_gaps = False
 
 global_node_counter = 0
 global_tree_name_dict = {}
@@ -269,6 +270,19 @@ class Dawg(object):
                 else:
                     out_lines.append(line)
             out_lines.append(f"\n{self.seed_line}\n")
+        """if tree_params["ALPHA"] != "None":
+            out_lines.append("Alpha = {"
+                             f"{tree_params['ALPHA']}"
+                             "}\n")"""
+        if tree_params["GAPS"] != "None" and global_use_gaps:
+            """out_lines.append("GapModel = {'PL'}\n")
+            out_lines.append("GapParams = {"
+                             f"{tree_params['GAPS'] / 100}, 10"  # TODO: hardcoded value 10!
+                             "}\n")"""
+            out_lines.append("Lambda = {"
+                             f" {tree_params['GAPS'] / 100}"
+                             "} ")
+
         with open(self.config_path, "w+") as config_file:
             config_file.write("".join(out_lines))
 
@@ -819,6 +833,9 @@ def init_args(arguments):
     parser.add_argument("--insert-matrix-gaps", action="store_true", help="Uses the presence/absence matrices to "
                                                                           "insert gaps into the simulated sequences. "
                                                                           "(generate)")
+    parser.add_argument("--use-gaps", action="store_true", help="EXPERIMENTAL! Tries to use the gap percentage found "
+                                                                "in tree parameters to simulate gaps in the MSA. "
+                                                                "(generate)")
     parser.add_argument("--use-all-trees", action="store_true", help="Forces the usage of all found trees instead of "
                                                                      "pulling trees randomly from the set of found "
                                                                      "trees. (generate)")
@@ -851,6 +868,9 @@ def init_args(arguments):
         except Exception as e:
             parser.error("The seed must be a non-zero, positive integer.")
         random.seed(int(args.seed))
+    if args.use_gaps:
+        global global_use_gaps
+        global_use_gaps = True
 
     return args
 
@@ -1090,7 +1110,7 @@ def generate_sequences(results, args, forced_out_dir=""):
 
     key_list = list(grouped_results.keys())
     # TODO: think of ways to fix the following
-    for i in range(int(args.num_sequences)):
+    for i in range(int(args.num_msas)):
         # Select tree to generate sequences for
         if not args.use_all_trees:
             rand_key = random.choice(key_list)
