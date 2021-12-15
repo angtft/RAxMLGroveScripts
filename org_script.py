@@ -1,22 +1,19 @@
 #!/usr/bin/env python3
 
-import collections
+import argparse
+import copy
 import json
-import sys
 import os
+import random
+import re
 import sqlite3
 import statistics
 import subprocess
-import argparse
-import random
-import re
-import copy
+import sys
 from io import StringIO
 from urllib.request import urlopen
+
 from Bio import Phylo, SeqIO, Seq, SeqRecord
-
-import actions.make_figures as fs
-
 
 global_max_tree_file_len = 0
 
@@ -35,7 +32,7 @@ BASE_TREE_NAME = "tree_{}.{}"
 BASE_TREE_DICT_NAME = "tree_dict.json"
 BASE_NODE_NAME = "taxon{}"
 
-
+# Columns to be present in the SQLite database (as lists of tuples of name and data type).
 COLUMNS = [
     ("TREE_ID", "CHAR(255)"), ("NUM_TAXA", "INT"), ("TREE_LENGTH", "FLOAT"), ("TREE_DIAMETER", "FLOAT"),
     ("TREE_HEIGHT", "FLOAT"), ("BRANCH_LENGTH_MEAN", "FLOAT"), ("BRANCH_LENGTH_VARIANCE", "FLOAT"),
@@ -77,6 +74,12 @@ BASE_SQL_FIND_COMMAND = "SELECT * FROM TREE t INNER JOIN PARTITION p ON t.TREE_I
 
 
 def get_tukeys_fences(lst):
+    """
+    Computes the Tukey's fences for values in a given list and returns the low and high fences. Values below the lower
+    fence and above the higher fence are considered to be outlier.
+    @param lst: list with numerical values
+    @return: low fence, high fence
+    """
     def is_float(value):
         try:
             c = float(value)
@@ -107,7 +110,9 @@ def get_tukeys_fences(lst):
 
 def traverse_and_rename_nodes(clade):
     """
-    Currently not used (?). Function is supposed to substitute taxon names in the tree.
+    Currently not used (?). Function is supposed to substitute taxon names in the tree, recursively.
+    @param clade: root of the current subtree
+    @return:
     """
     global global_node_counter
     global global_tree_name_dict
@@ -125,6 +130,9 @@ def copy_tree_file(src_path, dest_path):
     """
     Copies trees from source to destination paths. Used to anonymize trees as well at some point
     (currently RAxMLGrove trees are already anonymized).
+    @param src_path: source tree file path
+    @param dest_path: destination tree file path
+    @return:
     """
     global global_node_counter
     global global_tree_name_dict
@@ -151,12 +159,22 @@ def copy_tree_file(src_path, dest_path):
 
 
 def read_tree(path):
+    """
+    Reads a one-line file (the author specifically expects newick files here) and returns the string
+    @param path: path to tree file
+    @return: newick tree in string format
+    """
     with open(path) as file:
         tree_string = file.read().rstrip()
     return tree_string
 
 
 def create_dir_if_needed(path):
+    """
+    Creates a directory at path if that directory does not exist yet
+    @param path: path to directory
+    @return:
+    """
     try:
         os.makedirs(path)
     except OSError as e:
@@ -164,6 +182,13 @@ def create_dir_if_needed(path):
 
 
 def find_unused_tree_folder_name(root_dir_path, name):
+    """
+    This function finds the smallest number such that name + _number is an unused directory name in the specified
+    root directory
+    @param root_dir_path: root directory
+    @param name: desired base name
+    @return:
+    """
     counter = 0
     while True:     # TODO: JPL ICS would not approve!
         if counter == 0:
@@ -177,6 +202,14 @@ def find_unused_tree_folder_name(root_dir_path, name):
 
 
 def local_tree_copy(dest_dir, results, amount=1):
+    """
+    @deprecated
+    Copies a data set from a local archive to a destination
+    @param dest_dir: directory path to copy the data set to
+    @param results: results list as returned by db.find()
+    @param amount: number of data sets to be copied from the results list
+    @return:
+    """
     if type(results) is list:
         tree_pile = results
     else:
@@ -196,6 +229,9 @@ class Dawg(object):
     """
 
     def __init__(self, path):
+        """
+        @param path: path to Dawg root folder
+        """
         self.path = path
         self.seed_line = ""
 
@@ -206,9 +242,23 @@ class Dawg(object):
             self.__compile()
 
     def set_seed(self, seed):
+        """
+        Sets the seed for the pseudo random number generator
+        @param seed: seed
+        @return:
+        """
         self.seed_line = f"Seed = {seed}"
 
     def execute(self, tree_path, out_path, tree_params, num_repeats=1, num_of_sequence=0):
+        """
+        Executes Dawg to generate MSAs
+        @param tree_path: tree file path
+        @param out_path: output directory path
+        @param tree_params: tree dict with tree information (such as model, substitution rates)
+        @param num_repeats: number of MSAs to generate (deprecated)
+        @param num_of_sequence: (deprecated)
+        @return:
+        """
         out_dir = os.path.dirname(os.path.abspath(out_path))
         self.config_path = os.path.join(out_dir, "template_modified.dawg")
 
@@ -230,6 +280,10 @@ class Dawg(object):
             exit(0)
 
     def __compile(self):
+        """
+        Tries to compile Dawg
+        @return:
+        """
         print("Compiling Dawg...")
 
         build_path = os.path.join(self.path, "build")
@@ -247,6 +301,13 @@ class Dawg(object):
         print("Done!")
 
     def __configure(self, tree_path, tree_params):
+        """
+        Modifies a Dawg configuration file template with the information found in a tree dict and writes the modified
+        version to config_path
+        @param tree_path: path to tree file
+        @param tree_params: tree dict with tree information (such as model, substitution rates)
+        @return:
+        """
         tree_string = read_tree(tree_path)
         seq_len = tree_params["NUM_ALIGNMENT_SITES"]
         out_lines = []
@@ -293,6 +354,9 @@ class SeqGen(object):
     """
 
     def __init__(self, path):     # TODO: fix out paths (for Dawg as well)
+        """
+        @param path: path to Seq-Gen base directory
+        """
         self.path = path
         self.seed = -1
         self.execute_path = os.path.join(self.path, "source", "seq-gen")
@@ -300,9 +364,24 @@ class SeqGen(object):
             self.__compile()
 
     def set_seed(self, seed):       # TODO: error handling (if seed is not an integer > 0)
+        """
+        Sets the seed for the pseudo random number generator
+        @param seed: seed
+        @return:
+        """
         self.seed = seed
 
     def execute(self, tree_path, out_path, tree_params, num_repeats=1, num_of_sequence=0):
+        """
+        @deprecated
+        Executes Seq-Gen to generate MSA files
+        @param tree_path: path to tree file
+        @param out_path: output directory path
+        @param tree_params: tree dict with the relevant model/rate/frequency information
+        @param num_repeats: number of sequences to be generated (deprecated)
+        @param num_of_sequence: sequence number (deprecated)
+        @return:
+        """
         out_path_abs = out_path if os.path.isabs(out_path) else os.path.join(BASE_FILE_DIR, out_path)
         try:
             call = [self.execute_path, tree_path, f"-m{tree_params['MODEL']}",
@@ -326,6 +405,10 @@ class SeqGen(object):
             exit(0)
 
     def __compile(self):
+        """
+        Tries to compile Seq-Gen
+        @return:
+        """
         print("Compiling Seq-Gen...")
 
         build_path = os.path.join(self.path, "source")
@@ -342,7 +425,15 @@ class SeqGen(object):
 
 
 class BetterTreeDataBase(object):
+    """
+    The main SQLite database (db) object which is used to read and store tree information
+    """
+
     def __init__(self, path, force_rewrite=False):
+        """
+        @param path: path to database file
+        @param force_rewrite: if True, deletes old database file and creates a new one
+        """
         if os.path.isabs(path):
             self.db_path = path
         else:
@@ -384,6 +475,12 @@ class BetterTreeDataBase(object):
         self.conn.close()
 
     def fill_database(self, tree_dict_list, partition_list_dict):
+        """
+        Fills the db file with information from the tree and partition dicts
+        @param tree_dict_list: list of tree dicts
+        @param partition_list_dict: list of partition dicts
+        @return:
+        """
         for key in partition_list_dict:
             for part in partition_list_dict[key]:
                 for entry, _ in PARTITION_COLUMNS:
@@ -422,6 +519,12 @@ class BetterTreeDataBase(object):
         self.conn.commit()
 
     def database_entry_exists(self, id):
+        """
+        Checks if a given tree id is already present in the db
+        @param id: tree id
+        @return: True if tree is present in the db
+                 False otherwise
+        """
         command = \
             f"""
                 SELECT {id} FROM TREE;
@@ -434,10 +537,20 @@ class BetterTreeDataBase(object):
             return False
 
     def execute_command(self, command):
+        """
+        Executes a given SQL command on the db
+        @param command: command to execute
+        @return:
+        """
         # Allow only reading access here!
         self.cursor.execute(command)
 
     def find(self, command):
+        """
+        Expects a command to perform a query on the db and to return a list of dicts with found entries
+        @param command: "SELECT [...]" command to execute on the database
+        @return: list of results (results being dicts of column entries)
+        """
         self.cursor.execute(command)
         result = self.cursor.fetchall()
         return [dict(row) for row in result]
@@ -450,6 +563,10 @@ class RaxmlNGLogReader(object):
     """
 
     def __init__(self, path, model_path):
+        """
+        @param path: path to log file
+        @param model_path: path to model output file
+        """
         self.path = path
         self.partitions_dict = {}
         self.__read()
@@ -462,6 +579,10 @@ class RaxmlNGLogReader(object):
             pass
 
     def __read(self):
+        """
+        Extracts information from log file, puts it into partition dict
+        @return:
+        """
         with open(self.path) as file:
             part_info_dict = {}
             for line in file:
@@ -511,6 +632,11 @@ class RaxmlNGLogReader(object):
             pass
 
     def __read_model(self, path):
+        """
+        Reads the model output file and fills the partition dict with that info as well
+        @param path: path to model file
+        @return:
+        """
         modifier_dict = {
             "STATIONARY_FREQ_STR": ["F", "FC", "FO", "FE", "FU"],  # stationary frequencies
             "PROPORTION_INVARIANT_SITES_STR": ["I", "IO", "IC", "IU"],  # proportion of invariant sites
@@ -590,12 +716,21 @@ class OldRaxmlReader(object):
     """
 
     def __init__(self, path):
+        """
+        @param path: path to the RAxML log file
+        """
         self.path = path
         self.partitions_dict = {}
         self.__read()
         self.__fill_model_info()
 
     def __read(self):
+        """
+        Very big function to read all the different parameters listed in a log file and write them to the object's
+        partitions dict
+        @return:
+        """
+
         temp_part_dict = {
             "NUM_ALIGNMENT_SITES": [],
             "NUM_PATTERNS": [],
@@ -733,6 +868,11 @@ class OldRaxmlReader(object):
                 self.partitions_dict[str(i)] = copy.deepcopy(new_part)
 
     def __fill_model_info(self):
+        """
+        For the DNA data sets inferred under the GTR model (which are overall most of the data sets), fills the
+        partition dict with subsitution rates and frequencies found in the log
+        @return:
+        """
         for part_key in self.partitions_dict:
             part = self.partitions_dict[part_key]
             if "MODEL" in part and "RATES" in part:
@@ -754,21 +894,32 @@ class OldRaxmlReader(object):
                 part["FREQ_STR"] = f"{{{'/'.join([str(x) for x in part['BASE_FREQUENCIES']])}}}"
 
     def get_partition_info(self):
+        """
+        Returns the partitions dict, which maps partition numbers to dicts with information about that partition
+        @return: partition dict
+        """
         return self.partitions_dict
 
 
 class GenesisTreeDiameter(object):  # TODO: Add genesis to ./tools/
     """
-    We use Genesis here (https://github.com/lczech/genesis)
+    We use Genesis here (https://github.com/lczech/genesis) to make our life easier when collecting tree parameters.
     """
 
     def __init__(self, path):
+        """
+        @param path: path to Genesis base directory
+        """
         self.path = path
         self.executable_path = os.path.join(self.path, "bin", "apps", "tree_diameter")
         if not os.path.isfile(self.executable_path):
             self.__compile()
 
     def __compile(self):
+        """
+        Compiles (or at least tries to) Genesis
+        @return:
+        """
         print("Compiling genesis...")
 
         build_path = self.path
@@ -784,6 +935,12 @@ class GenesisTreeDiameter(object):  # TODO: Add genesis to ./tools/
         print("Done!")
 
     def get_len_and_diam_and_height(self, tree_path1):
+        """
+        Uses Genesis to compute some tree parameters
+        @param tree_path1: path to tree file
+        @return: length, diameter and height of the tree, if successful
+                 -1, -1, -1 otherwise
+        """
         call = [self.executable_path, tree_path1]
 
         try:
@@ -796,6 +953,12 @@ class GenesisTreeDiameter(object):  # TODO: Add genesis to ./tools/
 
 
 def init_args(arguments):
+    """
+    Parses command line arguments
+    @param arguments: command line arguments
+    @return: object with set arguments
+    """
+
     parser = argparse.ArgumentParser()
     parser.add_argument("operation", choices=["create", "add", "execute", "find", "generate", "stats", "justgimmeatree"],
                         # TODO: rework 'find' command?
@@ -876,6 +1039,11 @@ def init_args(arguments):
 
 
 def yes_no_prompt(message):
+    """
+    Asks the user for a 'yes' or 'no'
+    @param message: displayed question
+    @return: True if user picks 'yes', False if user picks 'no' otherwise
+    """
     print(message + " y/n")
     while True:
         user_in = input('>>> ')
@@ -888,6 +1056,12 @@ def yes_no_prompt(message):
 
 
 def save_tree_dict(path, result):
+    """
+    Saves the tree dict to file
+    @param path: output file path
+    @param result: tree dict
+    @return:
+    """
     try:
         json_obj = json.dumps(result, indent=4)
         out_path = os.path.join(path, BASE_TREE_DICT_NAME)
@@ -898,7 +1072,16 @@ def save_tree_dict(path, result):
         print(f"Error: could not export tree dict to file: {path}")
 
 
-def download_trees(dest_path, result, grouped_result={}, amount=0, forced_out_dir=""):
+def download_trees(dest_path, result, grouped_result=[], amount=0, forced_out_dir=""):
+    """
+    Downloades a data set from GitHub, also can save the tree dict (result) in the destination directory
+    @param dest_path: destination directory path
+    @param result: result dict of the tree to download
+    @param grouped_result: may be passed if the tree dict is to be saved as well
+    @param amount: amount of data sets to download (if result dict > amount)
+    @param forced_out_dir: will use that directory name if set, otherwise uses the tree id as the directory name
+    @return: list of paths to the downloaded data sets
+    """
     returned_paths = []
     try:
         for i in range(amount):
@@ -928,6 +1111,11 @@ def download_trees(dest_path, result, grouped_result={}, amount=0, forced_out_di
 
 
 def count_tree_leaves(clade):
+    """
+    Recursively determines the numbers of leaves in a tree and also carries branch lengths
+    @param clade: root of the current subtree
+    @return: number of leaves, list of branch lengths
+    """
     leaf_counter = 0
     branch_length_list = [clade.branch_length] if clade.branch_length else []
     if clade.name:
@@ -942,6 +1130,9 @@ def count_tree_leaves(clade):
 def get_tree_info(src_path, tree_id):
     """
     Creates a dict with statistical information about a tree with the help of Genesis
+    @param src_path: path to tree file (newick format)
+    @param tree_id: unique id of the tree
+    @return: tree dict
     """
     global global_num_of_too_big_trees
 
@@ -983,6 +1174,12 @@ def get_tree_info(src_path, tree_id):
 
 
 def file_exists(path, substr):
+    """
+    Checks if a file with a specific substring in its name can be found
+    @param path: path to file
+    @param substr: substring that the desired file must contain
+    @return: True if found, otherwise False
+    """
     files = os.listdir(path)
     for file_path in files:
         if substr in file_path:
@@ -994,6 +1191,8 @@ def read_pr_ab_matrix(path):
     """
     Reads the presence/absence matrix and returns the number of 0s and 1s
     as well as the matrix itself (currently as list of lists...)
+    @param path: path to matrix file
+    @return: number of 0s, number of 1s in the matrix, and the matrix itself
     """
     with open(path) as file:
         first_line = True
@@ -1026,6 +1225,11 @@ def read_pr_ab_matrix(path):
 
 
 def group_partitions_in_result_dicts(results):
+    """
+    Groups partitions of the same tree
+    @param results: as returned by db.find()
+    @return: dict which maps tree ids to lists of the partitions of that tree
+    """
     grouped_results = {}
     for result in results:
         tree_id = result["TREE_ID"]
@@ -1036,10 +1240,16 @@ def group_partitions_in_result_dicts(results):
     return grouped_results
 
 
-def assemble_sequences(path_list, out_dir, matrix_path="", tree_id=0):
+def assemble_sequences(path_list, out_dir, matrix_path=""):
     """
     Concatenates multiple MSAs into a single file. We use this to create a big MSA file out of separately generated
     per-partition-MSAs.
+    @param path_list: list of MSA file paths
+    @param out_dir: output directory for the assembled MSA file
+    @param matrix_path: path to the presence/absence matrix to use
+                        if set: sequence i in partition p will be filled with blank symbols if matrix[i, p] == 0
+                        if not set: no missing data will be introduced
+    @return:
     """
     out_path = os.path.join(out_dir, f"assembled_sequences.fasta")  # f"assembled_{tree_id}.fasta"
     with open(out_path, "w+") as file:
@@ -1076,7 +1286,15 @@ def generate_sequences(results, args, forced_out_dir=""):
     If args.seed is set, it will be used for the generators.
     If args.insert_matrix_gaps is set, the script will first generate MSAs for every partition, then assemble
         them into a single MSA file
+    @param results: dict returned by db.find()
+    @param args: arguments object
+    @param forced_out_dir: if set, the used output directory will carry that name,
+                           instead of setting the tree id as the out directory's name
+    @return: grouped_results: dict which contains for every tree_id a list of tree_dicts for every partition in that
+                              tree
+             returned_paths: list of paths to the downloaded tree sets (which will also contain the generated sequences)
     """
+
     returned_paths = []
 
     temp_tree_dir = os.path.join(os.path.abspath(args.out_dir))
@@ -1154,14 +1372,26 @@ def generate_sequences(results, args, forced_out_dir=""):
             seq_part_paths.append(seq_part_path)
 
         # Assemble MSAs
-        assemble_sequences(seq_part_paths, out_dir=dl_tree_path, matrix_path=pr_ab_matrix_path, tree_id=rand_tree_data["TREE_ID"])
+        assemble_sequences(seq_part_paths, out_dir=dl_tree_path, matrix_path=pr_ab_matrix_path)
 
     return grouped_results, returned_paths
 
 
 def hopefully_somewhat_better_directory_crawl(root_path, db_object, add_new_files_only=False, local=False):
     """
-    Crawls the RAxML Grove directory and creates a dict with tree information for every job (for "create" command)
+    Crawls the RAxML Grove directory and creates a dict with tree information for every job (for "create" command).
+    Since this function is recursive, we just store the dicts globally in global_tree_dict_list and in
+        global_part_list_dict (maybe not the most beautiful way, but one of the simplest)
+    @param root_path: archive path as passed by -a
+    @param db_object: our standard db_object
+    @param add_new_files_only: if True:
+                                    only adds new entries (trees with not present ids) to the db
+                                if False:
+                                    deletes the old db and creates a new one (if --force-rewrite is used) or just
+                                    creates a db if db not present
+    @param local: deprecated flag which was once used to create local databases
+                  (which did not download the trees from git)
+    @return: Nothing...
     """
 
     global global_tree_dict_list
@@ -1298,44 +1528,62 @@ def hopefully_somewhat_better_directory_crawl(root_path, db_object, add_new_file
 
 
 def count_result_trees(results):
+    """
+    Counts the number of unique tree ids in the result dict
+    @param results: result dict (as returned by a db_object)
+    @return: number of unique tree ids
+    """
     return len(set([r["TREE_ID"] for r in results]))
 
 
-def print_statistics(db_object):
-    if not os.path.isfile(fs.CSV_PATH):
-        fs.export_to_csv(db_object.db_path)
+def print_statistics(db_object, query):
+    """
+    Prints statistical information about the entries of the columns in the db (stats operation). If -q is used,
+    stats of the filtered results are printed.
+    @param db_object: our standard database object
+    @param query: query, as expected by -q argument
+    """
+
+    results = db_object.find(f"SELECT * FROM TREE t INNER JOIN PARTITION p ON t.TREE_ID = p.PARENT_ID WHERE {query};")
+    grouped_results = group_partitions_in_result_dicts(results)
 
     cat_float_values = {}
     cat_str_values = {}
-    with open(fs.CSV_PATH) as file:
-        cats = []
-        for line in file:
-            line = line.rstrip()
-            values = line.split(",")
-            if not cats:
-                cats = values
-                continue
 
-            for i in range(len(cats)):
-                value = values[i]
-                if value == "None" or cats[i] in ["TREE_ID", "PARENT_ID", "IS_INDELIBLE_COMPATIBLE", "RAXML_NG",
+    tree_columns = []
+    for col, _ in COLUMNS:
+        tree_columns.append(col)
+
+    for tree_id in grouped_results:
+        first = True
+        for tree_dict in grouped_results[tree_id]:
+            for cat in tree_dict:
+                value = tree_dict[cat]
+                if value == "None" or cat in ["TREE_ID", "PARENT_ID", "IS_INDELIBLE_COMPATIBLE", "RAXML_NG",
                                                   "PROPORTION_INVARIANT_SITES_STR", "PARTITION_NUM"]:
                     continue
 
-                if cats[i] in ["MODEL", "DATA_TYPE"]:
-                    if cats[i] in cat_str_values:
-                        cat_str_values[cats[i]].append(value)
+                if cat in tree_columns and not first:
+                    continue
+
+                if cat in ["MODEL", "DATA_TYPE"]:
+                    if cat in cat_str_values:
+                        cat_str_values[cat].append(value)
                     else:
-                        cat_str_values[cats[i]] = [value]
+                        cat_str_values[cat] = [value]
                 else:
                     try:
                         cvalue = float(value)
-                        if cats[i] in cat_float_values:
-                            cat_float_values[cats[i]].append(cvalue)
+                        if cat in cat_float_values:
+                            cat_float_values[cat].append(cvalue)
                         else:
-                            cat_float_values[cats[i]] = [cvalue]
-                    except:
+                            cat_float_values[cat] = [cvalue]
+                    except Exception as e:
                         pass
+            first = False
+
+    print(f"Number of trees: {len(list(grouped_results.keys()))}")
+    print()
 
     for cat in cat_float_values:
         lower_fence, upper_fence = get_tukeys_fences(cat_float_values[cat])
@@ -1458,6 +1706,7 @@ def main(args_list):
             query = args.query if args.query else "MODEL LIKE 'GTR%' AND RATE_AC AND FREQ_A AND OVERALL_NUM_ALIGNMENT_SITES > 0"      # TODO: expand possible models
             results = db_object.find(f"{BASE_SQL_FIND_COMMAND} WHERE MODEL LIKE 'GTR%' AND RATE_AC AND FREQ_A AND OVERALL_NUM_ALIGNMENT_SITES > 0 AND {query};")
         else:
+            # Categories we currently filter outliers for
             categories = {  # TODO: make this work for AA (and all the other stuff)
                 "NUM_TAXA": 0,
                 "TREE_DIAMETER": 0,
@@ -1498,7 +1747,7 @@ def main(args_list):
             else:
                 returned_results, returned_paths = generate_sequences(results, args, forced_out_dir="default")
     elif args.operation == "stats":
-        print_statistics(db_object)
+        print_statistics(db_object, args.query if args.query else "1")
 
     db_object.close()
 
