@@ -3,7 +3,7 @@
 These are some example scripts using the [RAxMLGrove](https://github.com/angtft/RAxMLGrove).
 
 Until we come up with a more clever solution (as GitHub only allows single files to be below 100 MB), the SQLite database 'latest.db' contains only the trees generated with RAxML8.
-The figures below were generated using that data only. The full database can be currently downloaded from [here](https://drive.google.com/file/d/1ucf2smX9XUdiOOgYP-GQ6COcYR-ujZaH/view?usp=sharing).
+The figures below were generated using that data only. The full database can be currently downloaded from [here](https://cme.h-its.org/exelixis/material/raxmlgrove/latest_all.db).
 
 ## Requirements
 The scripts use the following packages:
