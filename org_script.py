@@ -63,7 +63,7 @@ SUBSTITUTION_MODELS = {
     # "USERDEFINED": ""     # TODO
 }
 
-BASE_GITHUB_LINK = "https://raw.githubusercontent.com/angtft/RAxMLGrove/main/trees/{}/{}"
+BASE_GITHUB_LINK = "https://raw.githubusercontent.com/angtft/RAxMLGrove/c6ec6f73eedc42b20a08707060a2782d0b515599/trees/{}/{}"
 BASE_DB_FILE_NAME = "latest.db"
 BASE_FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_OUT_DIR = os.path.join(BASE_FILE_DIR, "out")
