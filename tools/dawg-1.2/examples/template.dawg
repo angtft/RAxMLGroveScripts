@@ -19,26 +19,24 @@ Freqs  = {0.20, 0.30, 0.30, 0.20}
 #Number of datasets to return
 Reps = 1
 
+
 #Output information
 File = "test1.fasta"
 Format = "Fasta"
-Out.Block.After =
-"""
- 
-"""
 
 
-#GapModel = {"NB", "NB"}
-#GapParams =
-#{
-#    {1, 0.5}, #insertion model
-#    {2, 0.5}  #deletion model
-#}
-
-GapModel = {"US"}
+Lambda = {0.0, 0.4}
+GapModel = {"NB", "NB"}
 GapParams =
 {
-    0.7, #probability of an indel of size 1
-    0.2, #probability of an indel of size 2
-    0.1  #probability of an indel of size 3
+    {1, 0.5}, #insertion model
+    {2, 0.5}  #deletion model
 }
+
+#GapModel = {"US"}
+#GapParams =
+#{
+#    0.7, #probability of an indel of size 1
+#    0.2, #probability of an indel of size 2
+#    0.1  #probability of an indel of size 3
+#}

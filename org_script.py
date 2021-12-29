@@ -33,6 +33,10 @@ BASE_TREE_DICT_NAME = "tree_dict.json"
 BASE_NODE_NAME = "taxon{}"
 
 # Columns to be present in the SQLite database (as lists of tuples of name and data type).
+META_COLUMNS = [
+    ("RG_VERSION", "CHAR(100)"), ("COMMIT_HASH", "CHAR(100)")
+]
+
 COLUMNS = [
     ("TREE_ID", "CHAR(255)"), ("NUM_TAXA", "INT"), ("TREE_LENGTH", "FLOAT"), ("TREE_DIAMETER", "FLOAT"),
     ("TREE_HEIGHT", "FLOAT"), ("BRANCH_LENGTH_MEAN", "FLOAT"), ("BRANCH_LENGTH_VARIANCE", "FLOAT"),
@@ -63,7 +67,7 @@ SUBSTITUTION_MODELS = {
     # "USERDEFINED": ""     # TODO
 }
 
-BASE_GITHUB_LINK = "https://raw.githubusercontent.com/angtft/RAxMLGrove/c6ec6f73eedc42b20a08707060a2782d0b515599/trees/{}/{}"
+BASE_GITHUB_LINK = "https://raw.githubusercontent.com/angtft/RAxMLGrove/{}/trees/{}/{}"  # c6ec6f73eedc42b20a08707060a2782d0b515599 hash of RG v0.2 commit
 BASE_DB_FILE_NAME = "latest.db"
 BASE_FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_OUT_DIR = os.path.join(BASE_FILE_DIR, "out")
@@ -71,6 +75,11 @@ BASE_STAT_OUT_FILE = os.path.join(BASE_FILE_DIR, "statistics.csv")
 BASE_SEQ_FILE_FORMAT = "Phylip"  # TODO: maybe think some more about formats (since Phylip only allows taxon names up to 10 characters, and SeqGen doesn't output other formats?)
 BASE_DAWG_SEQ_FILE_FORMAT = "Fasta"
 BASE_SQL_FIND_COMMAND = "SELECT * FROM TREE t INNER JOIN PARTITION p ON t.TREE_ID = p.PARENT_ID"
+
+DEFAULT_DB_FILE_PATH = os.path.join(BASE_FILE_DIR, BASE_DB_FILE_NAME)
+DAWG_PATH = os.path.join(BASE_FILE_DIR, "tools", "dawg-1.2")
+SEQGEN_PATH = os.path.join(BASE_FILE_DIR, "tools", "Seq-Gen-1.3.4")
+GENESIS_PATH = os.path.join(BASE_FILE_DIR, "tools", "genesis-0.24.0")
 
 
 def get_tukeys_fences(lst):
@@ -80,6 +89,7 @@ def get_tukeys_fences(lst):
     @param lst: list with numerical values
     @return: low fence, high fence
     """
+
     def is_float(value):
         try:
             c = float(value)
@@ -190,7 +200,7 @@ def find_unused_tree_folder_name(root_dir_path, name):
     @return:
     """
     counter = 0
-    while True:     # TODO: JPL ICS would not approve!
+    while True:  # TODO: JPL ICS would not approve!
         if counter == 0:
             suggested_name = name
         else:
@@ -331,10 +341,6 @@ class Dawg(object):
                 else:
                     out_lines.append(line)
             out_lines.append(f"\n{self.seed_line}\n")
-        """if tree_params["ALPHA"] != "None":
-            out_lines.append("Alpha = {"
-                             f"{tree_params['ALPHA']}"
-                             "}\n")"""
         if tree_params["GAPS"] != "None" and global_use_gaps:
             """out_lines.append("GapModel = {'PL'}\n")
             out_lines.append("GapParams = {"
@@ -343,6 +349,8 @@ class Dawg(object):
             out_lines.append("Lambda = {"
                              f" {tree_params['GAPS'] / 100}"
                              "} ")
+        if tree_params["ALPHA"] != "None":
+            out_lines.append(f"Gamma = {tree_params['ALPHA']}")
 
         with open(self.config_path, "w+") as config_file:
             config_file.write("".join(out_lines))
@@ -353,7 +361,7 @@ class SeqGen(object):
     We also use Seq-Gen here (https://github.com/rambaut/Seq-Gen)
     """
 
-    def __init__(self, path):     # TODO: fix out paths (for Dawg as well)
+    def __init__(self, path):  # TODO: fix out paths (for Dawg as well)
         """
         @param path: path to Seq-Gen base directory
         """
@@ -363,7 +371,7 @@ class SeqGen(object):
         if not os.path.isfile(self.execute_path):
             self.__compile()
 
-    def set_seed(self, seed):       # TODO: error handling (if seed is not an integer > 0)
+    def set_seed(self, seed):  # TODO: error handling (if seed is not an integer > 0)
         """
         Sets the seed for the pseudo random number generator
         @param seed: seed
@@ -453,6 +461,16 @@ class BetterTreeDataBase(object):
     def __prepare_empty_table(self):
         self.cursor.execute("DROP TABLE IF EXISTS TREE")
         self.cursor.execute("DROP TABLE IF EXISTS PARTITION")
+        self.cursor.execute("DROP TABLE IF EXISTS META_DATA")
+
+        command = \
+            f"""
+                        CREATE TABLE META_DATA(
+                            {", ".join([f"{entry} {type}" for entry, type in META_COLUMNS])}
+                        );
+                    """
+        self.cursor.execute(command)
+
         command = \
             f"""
                 CREATE TABLE TREE(
@@ -474,20 +492,34 @@ class BetterTreeDataBase(object):
     def close(self):
         self.conn.close()
 
-    def fill_database(self, tree_dict_list, partition_list_dict):
+    def fill_database(self, tree_dict_list, partition_list_dict, meta_info_dict):
         """
         Fills the db file with information from the tree and partition dicts
         @param tree_dict_list: list of tree dicts
         @param partition_list_dict: list of partition dicts
+        @param meta_info_dict: dict with meta information (such as the relevant RG commit hash)
         @return:
         """
+        for entry, _ in META_COLUMNS:
+            if entry not in meta_info_dict:
+                meta_info_dict[entry] = None
+
+        try:
+            command = \
+                f"""
+                    INSERT INTO META_DATA({", ".join([f"{entry}" for entry, _ in META_COLUMNS])})
+                    VALUES ({", ".join([f"'{meta_info_dict[entry]}'" for entry, _ in META_COLUMNS])});
+                """
+            self.cursor.execute(command)
+        except Exception as e:
+            print(f"Exception in fill_database during writing of meta information: {e}")
+
         for key in partition_list_dict:
             for part in partition_list_dict[key]:
                 for entry, _ in PARTITION_COLUMNS:
                     if entry not in part:
                         part[entry] = None
 
-        print(tree_dict_list)
         for dct in tree_dict_list:
             for entry, _ in COLUMNS:
                 if entry not in dct:
@@ -499,10 +531,10 @@ class BetterTreeDataBase(object):
                     part_command = \
                         f"""
                         INSERT INTO PARTITION({
-                            ", ".join([f"{entry}" for entry, _ in PARTITION_COLUMNS])
+                        ", ".join([f"{entry}" for entry, _ in PARTITION_COLUMNS])
                         })
                         VALUES ({
-                            ", ".join([f"'{part_dct[entry]}'" for entry, _ in PARTITION_COLUMNS])
+                        ", ".join([f"'{part_dct[entry]}'" for entry, _ in PARTITION_COLUMNS])
                         });
                         """
                     self.cursor.execute(part_command)
@@ -514,7 +546,7 @@ class BetterTreeDataBase(object):
                     """
                 self.cursor.execute(command)
             except Exception as e:
-                print("Exception in fill_database: {}".format(e))
+                print(f"Exception in fill_database: {e}")
                 continue
         self.conn.commit()
 
@@ -554,6 +586,27 @@ class BetterTreeDataBase(object):
         self.cursor.execute(command)
         result = self.cursor.fetchall()
         return [dict(row) for row in result]
+
+    def get_meta_info(self):
+        """
+        Reads the meta info of the current db from the META_DATA table. If something goes wrong,
+        returns a default dict with the commit hash of RAxMLGrove v0.2.
+        @return: meta info dict
+        """
+        meta_info_dict = {"COMMIT_HASH": "c6ec6f73eedc42b20a08707060a2782d0b515599"}  # commit hash of RG v0.2
+        for entry, _ in META_COLUMNS:
+            if entry not in meta_info_dict:
+                meta_info_dict[entry] = None
+
+        try:
+            query = f"SELECT * FROM META_DATA"
+            self.cursor.execute(query)
+            results = self.cursor.fetchall()
+            meta_dict = dict(results[0])
+            return meta_dict
+        except Exception as e:
+            print(f"Exception in get_commit_hash: {e}")
+        return meta_info_dict
 
 
 class RaxmlNGLogReader(object):
@@ -694,7 +747,8 @@ class RaxmlNGLogReader(object):
             if "ASCERTAINMENT_BIAS_CORRECTION_STR" in self.partitions_dict[part_key] and \
                     "G" in self.partitions_dict[part_key]["ASCERTAINMENT_BIAS_CORRECTION_STR"]:
                 self.partitions_dict[part_key]["ALPHA"] = \
-                self.__get_values_from_modifiers(self.partitions_dict[part_key]["ASCERTAINMENT_BIAS_CORRECTION_STR"])[0]
+                    self.__get_values_from_modifiers(
+                        self.partitions_dict[part_key]["ASCERTAINMENT_BIAS_CORRECTION_STR"])[0]
 
             if "STATIONARY_FREQ_STR" in self.partitions_dict[part_key] and \
                     "DATA_TYPE" in self.partitions_dict[part_key] and \
@@ -960,7 +1014,8 @@ def init_args(arguments):
     """
 
     parser = argparse.ArgumentParser()
-    parser.add_argument("operation", choices=["create", "add", "execute", "find", "generate", "stats", "justgimmeatree"],
+    parser.add_argument("operation",
+                        choices=["create", "add", "execute", "find", "generate", "stats", "justgimmeatree"],
                         # TODO: rework 'find' command?
                         help="'create' iterates over a RAxML out files archive parametrized with '-a' and "
                              "writes a database (db) file (the name can be parametrized with '-n'). Default db name "
@@ -973,6 +1028,8 @@ def init_args(arguments):
     parser.add_argument("-n", "--db-name", help=f"Sets the name of the database file. If not set, this tool will "
                                                 f"try to create/access the '{BASE_DB_FILE_NAME}' file.")
     parser.add_argument("-a", "--archive-path", help="Sets the raxml out files archive path. (create)")
+    parser.add_argument("--rg-commit-hash", help="Sets a specific commit hash of RAxMLGrove in the db metadata. "
+                                                 "(create)")
     parser.add_argument("-c", "--command", help="The command to execute on the database. (execute)")
     parser.add_argument("-q", "--query", help="Part of the statement after the 'WHERE' clause "
                                               "to find trees in the db. CAUTION: We do not sanitize, "
@@ -980,17 +1037,18 @@ def init_args(arguments):
     parser.add_argument("--list", action='store_true', help="Lists all found trees, "
                                                             "without asking for download. (find)")
     parser.add_argument("--num-msas", default=1, help="Number of MSAs to be generated. To generate "
-                                                           "a MSA we randomly draw a tree from the db (can be "
-                                                           "used with -q) and run a sequence generator with that tree. "
-                                                           "(generate)")
+                                                      "a MSA we randomly draw a tree from the db (can be "
+                                                      "used with -q) and run a sequence generator with that tree. "
+                                                      "(generate)")
     parser.add_argument("--local", default=True, help="FOR TESTING PURPOSES (don't use it).")
     parser.add_argument("--force-rewrite", action='store_true', help="Forces to rewrite the default db or the db "
                                                                      "specified using '-n'. (create)")
     parser.add_argument("--seq-len", default=8000, help="Default generated sequence length if it is not specified in "
                                                         "the tree log data. (generate)")
     # TODO: maybe reintroduce this argument at some point when it is clear how to handle edge cases...
-    parser.add_argument("--set-seq-len", help="CURRENTLY NOT WORKING! Sets the generated sequence length IGNORING the sequence length "
-                                              "specified in the tree log data. (generate)")
+    parser.add_argument("--set-seq-len",
+                        help="CURRENTLY NOT WORKING! Sets the generated sequence length IGNORING the sequence length "
+                             "specified in the tree log data. (generate)")
     parser.add_argument("--filter-outliers", action='store_true', help="Filters trees with uncommon characteristics "
                                                                        "(using Tukey's fences). (generate)")
     parser.add_argument("--insert-matrix-gaps", action="store_true", help="Uses the presence/absence matrices to "
@@ -1072,22 +1130,26 @@ def save_tree_dict(path, result):
         print(f"Error: could not export tree dict to file: {path}")
 
 
-def download_trees(dest_path, result, grouped_result=[], amount=0, forced_out_dir=""):
+def download_trees(dest_path, result, commit_hash, grouped_result=None, amount=0, forced_out_dir=""):
     """
     Downloades a data set from GitHub, also can save the tree dict (result) in the destination directory
     @param dest_path: destination directory path
     @param result: result dict of the tree to download
+    @param commit_hash: commit hash of the RG repo (since the tree ids might change between different RG versions)
     @param grouped_result: may be passed if the tree dict is to be saved as well
     @param amount: amount of data sets to download (if result dict > amount)
     @param forced_out_dir: will use that directory name if set, otherwise uses the tree id as the directory name
     @return: list of paths to the downloaded data sets
     """
+    if grouped_result is None:
+        grouped_result = []
     returned_paths = []
     try:
         for i in range(amount):
             dct = result[i]
             tree_id = dct["TREE_ID"]
-            dir_path = os.path.join(dest_path, tree_id) if not forced_out_dir else os.path.join(dest_path, forced_out_dir)
+            dir_path = os.path.join(dest_path, tree_id) if not forced_out_dir else os.path.join(dest_path,
+                                                                                                forced_out_dir)
             possible_files = [
                 "tree_best.newick", "tree_part.newick", "log_0.txt", "model_0.txt", "iqt.pr_ab_matrix"
             ]
@@ -1097,7 +1159,7 @@ def download_trees(dest_path, result, grouped_result=[], amount=0, forced_out_di
 
             for file_name in possible_files:
                 try:
-                    with urlopen(BASE_GITHUB_LINK.format(tree_id, file_name)) as webpage:
+                    with urlopen(BASE_GITHUB_LINK.format(commit_hash, tree_id, file_name)) as webpage:
                         content = webpage.read().decode()
                     with open(os.path.join(dir_path, file_name), "w+") as output:
                         output.write(content)
@@ -1142,7 +1204,7 @@ def get_tree_info(src_path, tree_id):
         tree = Phylo.read(src_path, "newick")
         num_leaves, branch_length_list = count_tree_leaves(tree.root)
         try:
-            diamcalc = GenesisTreeDiameter("./tools/genesis-0.24.0/")  # TODO: don't do it with genesis
+            diamcalc = GenesisTreeDiameter(GENESIS_PATH)  # TODO: don't do it with genesis
         except Exception as e:
             print("Genesis exception: {}".format(e))
             diamcalc = -1
@@ -1280,7 +1342,7 @@ def assemble_sequences(path_list, out_dir, matrix_path=""):
             SeqIO.write(new_rec, file, "fasta")
 
 
-def generate_sequences(results, args, forced_out_dir=""):
+def generate_sequences(results, args, meta_info_dict, forced_out_dir=""):
     """
     Generates sequences based on the result dict, using Dawg or Seq-Gen.
     If args.seed is set, it will be used for the generators.
@@ -1302,9 +1364,9 @@ def generate_sequences(results, args, forced_out_dir=""):
 
     if args.generator == "seq-gen":
         raise ValueError("seq-gen currently not working!")
-        generator = SeqGen(os.path.join(BASE_FILE_DIR, "tools", "Seq-Gen-1.3.4"))
+        generator = SeqGen(SEQGEN_PATH)
     else:
-        generator = Dawg(os.path.join(BASE_FILE_DIR, "tools", "dawg-1.2"))
+        generator = Dawg(DAWG_PATH)
 
     if args.seed:
         generator.set_seed(args.seed)
@@ -1350,8 +1412,9 @@ def generate_sequences(results, args, forced_out_dir=""):
             dl_tree_path = os.path.join(temp_tree_dir, tree_folder_name)
         else:
             dl_tree_path = os.path.join(temp_tree_dir, forced_out_dir)
-        returned_paths = download_trees(temp_tree_dir, [rand_tree_data], grouped_result=grouped_results[rand_key],
-                                        amount=1, forced_out_dir=tree_folder_name)
+        returned_paths.extend(download_trees(temp_tree_dir, [rand_tree_data], meta_info_dict["COMMIT_HASH"],
+                                        grouped_result=grouped_results[rand_key],
+                                        amount=1, forced_out_dir=tree_folder_name))
         tree_path = os.path.join(dl_tree_path, BASE_TREE_NAME.format("best", BASE_TREE_FORMAT))
 
         # Get presence/absence matrix path if needed
@@ -1365,7 +1428,8 @@ def generate_sequences(results, args, forced_out_dir=""):
 
         # Generate per-partition MSAs
         for p_num in range(len(partitions)):
-            seq_part_path = os.path.join(dl_tree_path, f"seq_{i}.part{p_num}.{BASE_DAWG_SEQ_FILE_FORMAT}")  # TODO: do something with the formats...
+            seq_part_path = os.path.join(dl_tree_path,
+                                         f"seq_{i}.part{p_num}.{BASE_DAWG_SEQ_FILE_FORMAT}")  # TODO: do something with the formats...
 
             part = partitions[p_num]
             generator.execute(tree_path, seq_part_path, part)
@@ -1375,6 +1439,34 @@ def generate_sequences(results, args, forced_out_dir=""):
         assemble_sequences(seq_part_paths, out_dir=dl_tree_path, matrix_path=pr_ab_matrix_path)
 
     return grouped_results, returned_paths
+
+
+def get_archive_meta_data(archive_path):
+    """
+    Collects relevant meta data about the RAxMLGrove (RG) repository to put into the SQLite db.
+    Currently we require the GitPython package for this function to work. If GitPython is not installed,
+    a warning will be printed. We use this function to keep track of the different commits to RG, which might
+    change the mapping of TREE_ID in SQLite db to the directories in RG, by saving the commit hash and using it
+    to access directories in the RG repository on GitHub (when files are being downloaded).
+    @param archive_path: path to RG root directory
+    @return: dict with meta data
+    """
+    meta_dict = {}
+
+    try:
+        import git  # GitPython import here, as we use it for this functionality only
+        repo = git.Repo(archive_path, search_parent_directories=True)
+        commit_hash = repo.head.object.hexsha
+
+        meta_dict["COMMIT_HASH"] = commit_hash
+        print(commit_hash)
+    except Exception as e:
+        print("WARNING: the script was unable to get the current commit hash of the RG repository (supplied with -a).\n"
+              "The commit hash will not be noted in the SQLite db, which might mess up the mapping of TREE_IDs in the "
+              "SQLite db to the data set directories of the RG repository on GitHub at some point in future "
+              "(or even now).")
+
+    return meta_dict
 
 
 def hopefully_somewhat_better_directory_crawl(root_path, db_object, add_new_files_only=False, local=False):
@@ -1502,7 +1594,8 @@ def hopefully_somewhat_better_directory_crawl(root_path, db_object, add_new_file
                 tree_dicts.append(temp_dict)
 
                 tree_info["OVERALL_NUM_ALIGNMENT_SITES"] += partitions_info[key]["NUM_ALIGNMENT_SITES"] \
-                    if "NUM_ALIGNMENT_SITES" in partitions_info[key] and partitions_info[key]["NUM_ALIGNMENT_SITES"] else 0
+                    if "NUM_ALIGNMENT_SITES" in partitions_info[key] and partitions_info[key][
+                    "NUM_ALIGNMENT_SITES"] else 0
                 tree_info["OVERALL_NUM_PATTERNS"] += partitions_info[key]["NUM_PATTERNS"] \
                     if "NUM_PATTERNS" in partitions_info[key] and partitions_info[key]["NUM_PATTERNS"] else 0
                 tree_info["OVERALL_GAPS"] = partitions_info[key]["GAPS"] \
@@ -1560,7 +1653,7 @@ def print_statistics(db_object, query):
             for cat in tree_dict:
                 value = tree_dict[cat]
                 if value == "None" or cat in ["TREE_ID", "PARENT_ID", "IS_INDELIBLE_COMPATIBLE", "RAXML_NG",
-                                                  "PROPORTION_INVARIANT_SITES_STR", "PARTITION_NUM"]:
+                                              "PROPORTION_INVARIANT_SITES_STR", "PARTITION_NUM"]:
                     continue
 
                 if cat in tree_columns and not first:
@@ -1611,13 +1704,14 @@ def print_statistics(db_object, query):
             else:
                 str_buckets[entry] = 1
         for key in str_buckets:
-            str_buckets_list.append((key, str_buckets[key], "{0:.2f}%".format(str_buckets[key] * 100 / len(cat_str_values[cat]))))
+            str_buckets_list.append(
+                (key, str_buckets[key], "{0:.2f}%".format(str_buckets[key] * 100 / len(cat_str_values[cat]))))
         str_buckets_list.sort(key=lambda x: x[1], reverse=True)
 
         print(f"{cat}: {str_buckets_list}\n")
 
 
-def main(args_list):
+def main(args_list, is_imported=True):
     """
     Main function. We do stuff depending on the selected operation.
     Throughout most of the code, db_object will contain our SQLite database and answer queries. The returned
@@ -1640,8 +1734,9 @@ def main(args_list):
 
     args = init_args(args_list)
 
-    db_path = args.db_name if args.db_name else BASE_DB_FILE_NAME
+    db_path = args.db_name if args.db_name else DEFAULT_DB_FILE_PATH
     db_object = BetterTreeDataBase(db_path, force_rewrite=args.force_rewrite)
+    meta_info_dict = {}
 
     # We return found data sets / data sets which were used for the generation of MSAs, in case main() is called
     # directly. returned_paths contains the directory paths the data sets were downloaded to.
@@ -1650,19 +1745,28 @@ def main(args_list):
 
     if args.operation == "create" or args.operation == "add":
         archive_path = args.archive_path
+        if not args.rg_commit_hash:
+            meta_info_dict = get_archive_meta_data(archive_path)
+        else:
+            meta_info_dict = {"COMMIT_HASH": args.rg_commit_hash}
 
         # Crawl the RAxMLGrove archive, parse RAxML output files, fill global_tree_dict_list and global_part_list_dict,
         # write them into a SQLite database afterwards.
         hopefully_somewhat_better_directory_crawl(archive_path, db_object, add_new_files_only=(args.operation == "add"),
                                                   local=False)
-        db_object.fill_database(global_tree_dict_list, global_part_list_dict)
+        db_object.fill_database(global_tree_dict_list, global_part_list_dict, meta_info_dict)
 
         print("\nExceptions: {}".format(global_exception_counter))
         print("Num too big trees: {}".format(global_num_of_too_big_trees))
     elif args.operation == "execute":
         db_object.execute_command(args.command)
     elif args.operation == "find":
-        result = db_object.find(f"SELECT * FROM TREE t INNER JOIN PARTITION p ON t.TREE_ID = p.PARENT_ID WHERE {args.query};")
+        meta_info_dict = db_object.get_meta_info()
+        if args.rg_commit_hash:
+            meta_info_dict["COMMIT_HASH"] = args.rg_commit_hash
+
+        result = db_object.find(
+            f"SELECT * FROM TREE t INNER JOIN PARTITION p ON t.TREE_ID = p.PARENT_ID WHERE {args.query};")
         grouped_result = group_partitions_in_result_dicts(result)
         num_results = count_result_trees(result)
 
@@ -1689,22 +1793,30 @@ def main(args_list):
                     tree_dest_dir = args.out_dir or input('Destination (default cwd): ')
 
                     amount_to_download = input('How many trees to download (default all): ')
-                    returned_paths = download_trees(tree_dest_dir, result, grouped_result=grouped_result,
-                                   amount=(int(amount_to_download) if amount_to_download else num_results))
+                    returned_paths = download_trees(tree_dest_dir, result, meta_info_dict["COMMIT_HASH"],
+                                                    grouped_result=grouped_result,
+                                                    amount=(
+                                                        int(amount_to_download) if amount_to_download else num_results))
                     """local_tree_copy(tree_dest_dir, result,
                                     amount=(int(amount_to_download) if amount_to_download else num_results))"""
         else:
-            for dct in result:
-                if dct["TREE_ID"] not in printed_dcts:
-                    print(dct)
-                    printed_dcts[dct["TREE_ID"]] = 1
+            if not is_imported:
+                for dct in result:
+                    if dct["TREE_ID"] not in printed_dcts:
+                        print(dct)
+                        printed_dcts[dct["TREE_ID"]] = 1
 
         returned_results = grouped_result
 
     elif args.operation == "generate" or args.operation == "justgimmeatree":
+        meta_info_dict = db_object.get_meta_info()
+        if args.rg_commit_hash:
+            meta_info_dict["COMMIT_HASH"] = args.rg_commit_hash  # TODO: warn if hash was present and is overwritten?
+
         if not args.filter_outliers:
-            query = args.query if args.query else "MODEL LIKE 'GTR%' AND RATE_AC AND FREQ_A AND OVERALL_NUM_ALIGNMENT_SITES > 0"      # TODO: expand possible models
-            results = db_object.find(f"{BASE_SQL_FIND_COMMAND} WHERE MODEL LIKE 'GTR%' AND RATE_AC AND FREQ_A AND OVERALL_NUM_ALIGNMENT_SITES > 0 AND {query};")
+            query = args.query if args.query else "MODEL LIKE 'GTR%' AND RATE_AC AND FREQ_A AND OVERALL_NUM_ALIGNMENT_SITES > 0"  # TODO: expand possible models
+            results = db_object.find(
+                f"{BASE_SQL_FIND_COMMAND} WHERE MODEL LIKE 'GTR%' AND RATE_AC AND FREQ_A AND OVERALL_NUM_ALIGNMENT_SITES > 0 AND {query};")
         else:
             # Categories we currently filter outliers for
             categories = {  # TODO: make this work for AA (and all the other stuff)
@@ -1737,15 +1849,17 @@ def main(args_list):
                 query = args.query + " AND " + " AND ".join(filter_list)
             else:
                 query = " AND ".join(filter_list)
-            results = db_object.find(f"{BASE_SQL_FIND_COMMAND} WHERE MODEL LIKE 'GTR%' AND RATE_AC AND FREQ_A AND OVERALL_NUM_ALIGNMENT_SITES > 0 AND {query};")
+            results = db_object.find(
+                f"{BASE_SQL_FIND_COMMAND} WHERE MODEL LIKE 'GTR%' AND RATE_AC AND FREQ_A AND OVERALL_NUM_ALIGNMENT_SITES > 0 AND {query};")
 
         print("Found {} trees".format(count_result_trees(results)))
 
         if len(results) > 0:
             if args.operation == "generate":
-                returned_results, returned_paths = generate_sequences(results, args)
+                returned_results, returned_paths = generate_sequences(results, args, meta_info_dict)
             else:
-                returned_results, returned_paths = generate_sequences(results, args, forced_out_dir="default")
+                returned_results, returned_paths = generate_sequences(results, args, meta_info_dict,
+                                                                      forced_out_dir="default")
     elif args.operation == "stats":
         print_statistics(db_object, args.query if args.query else "1")
 
@@ -1756,6 +1870,6 @@ def main(args_list):
 
 if __name__ == "__main__":
     if len(sys.argv) > 1:
-        main(sys.argv[1:])
+        main(sys.argv[1:], is_imported=False)
     else:
         main(["-h"])
