@@ -1130,24 +1130,26 @@ def save_tree_dict(path, result):
         print(f"Error: could not export tree dict to file: {path}")
 
 
-def download_trees(dest_path, result, commit_hash, grouped_result=None, amount=0, forced_out_dir=""):
+def download_trees(dest_path, result, commit_hash, grouped_result, amount=0, forced_out_dir=""):
     """
     Downloades a data set from GitHub, also can save the tree dict (result) in the destination directory
     @param dest_path: destination directory path
-    @param result: result dict of the tree to download
+    @param result: result dict of the tree to download (deprecated)
     @param commit_hash: commit hash of the RG repo (since the tree ids might change between different RG versions)
     @param grouped_result: may be passed if the tree dict is to be saved as well
     @param amount: amount of data sets to download (if result dict > amount)
     @param forced_out_dir: will use that directory name if set, otherwise uses the tree id as the directory name
     @return: list of paths to the downloaded data sets
     """
-    if grouped_result is None:
-        grouped_result = []
+
     returned_paths = []
+    tree_keys = list(grouped_result.keys())
     try:
         for i in range(amount):
-            dct = result[i]
-            tree_id = dct["TREE_ID"]
+            current_key = tree_keys[i]
+            dct = grouped_result[current_key]
+            tree_id = dct[0]["TREE_ID"]
+            print(f"downloading {tree_id}")
             dir_path = os.path.join(dest_path, tree_id) if not forced_out_dir else os.path.join(dest_path,
                                                                                                 forced_out_dir)
             possible_files = [
@@ -1155,7 +1157,7 @@ def download_trees(dest_path, result, commit_hash, grouped_result=None, amount=0
             ]
             create_dir_if_needed(dir_path)
             if grouped_result:
-                save_tree_dict(dir_path, grouped_result)
+                save_tree_dict(dir_path, grouped_result[tree_id])
 
             for file_name in possible_files:
                 try:
@@ -1350,6 +1352,7 @@ def generate_sequences(results, args, meta_info_dict, forced_out_dir=""):
         them into a single MSA file
     @param results: dict returned by db.find()
     @param args: arguments object
+    @param meta_info_dict: dict containing meta info, such as the commit hash of the current db
     @param forced_out_dir: if set, the used output directory will carry that name,
                            instead of setting the tree id as the out directory's name
     @return: grouped_results: dict which contains for every tree_id a list of tree_dicts for every partition in that
@@ -1413,8 +1416,8 @@ def generate_sequences(results, args, meta_info_dict, forced_out_dir=""):
         else:
             dl_tree_path = os.path.join(temp_tree_dir, forced_out_dir)
         returned_paths.extend(download_trees(temp_tree_dir, [rand_tree_data], meta_info_dict["COMMIT_HASH"],
-                                        grouped_result=grouped_results[rand_key],
-                                        amount=1, forced_out_dir=tree_folder_name))
+                                             grouped_results,
+                                             amount=1, forced_out_dir=tree_folder_name))
         tree_path = os.path.join(dl_tree_path, BASE_TREE_NAME.format("best", BASE_TREE_FORMAT))
 
         # Get presence/absence matrix path if needed
@@ -1553,7 +1556,8 @@ def hopefully_somewhat_better_directory_crawl(root_path, db_object, add_new_file
                 tree_dicts.append(temp_dict)
 
                 tree_info["OVERALL_NUM_ALIGNMENT_SITES"] += partitions_info[key]["NUM_ALIGNMENT_SITES"] \
-                    if "NUM_ALIGNMENT_SITES" in partitions_info[key] and partitions_info[key]["NUM_ALIGNMENT_SITES"] else 0
+                    if "NUM_ALIGNMENT_SITES" in partitions_info[key] and partitions_info[key][
+                    "NUM_ALIGNMENT_SITES"] else 0
                 tree_info["OVERALL_NUM_PATTERNS"] += partitions_info[key]["NUM_PATTERNS"] \
                     if "NUM_PATTERNS" in partitions_info[key] and partitions_info[key]["NUM_PATTERNS"] else 0
                 tree_info["OVERALL_GAPS"] += partitions_info[key]["GAPS"] \
@@ -1794,7 +1798,7 @@ def main(args_list, is_imported=True):
 
                     amount_to_download = input('How many trees to download (default all): ')
                     returned_paths = download_trees(tree_dest_dir, result, meta_info_dict["COMMIT_HASH"],
-                                                    grouped_result=grouped_result,
+                                                    grouped_result,
                                                     amount=(
                                                         int(amount_to_download) if amount_to_download else num_results))
                     """local_tree_copy(tree_dest_dir, result,
