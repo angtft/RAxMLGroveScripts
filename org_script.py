@@ -10,6 +10,7 @@ import sqlite3
 import statistics
 import subprocess
 import sys
+import traceback
 from io import StringIO
 from urllib.request import urlopen
 
@@ -830,16 +831,22 @@ class OldRaxmlReader(object):
                 elif line.startswith("sites partition_"):
                     value = line.split("=")
                     try:
-                        part_line = value[1].strip() + ","
-                        intervals = re.findall(r"(.*?),[ ]*", part_line)
+                        intervals = value[1].strip().split(",")
+                        part_size = 0
+                        for interval in intervals:
+                            temp_split = interval.split("\\")
+                            summands = temp_split[0].replace(" ", "").split("-")
+                            divisor = int(temp_split[1]) if len(temp_split) > 1 else 1
 
-                        summands = re.findall(r"(\d+?)[-\\]+", intervals[0] + "-")
-                        s1 = int(summands[0])
-                        s2 = int(summands[1])
-                        part_size = s2 - s1 + 1
+                            s1 = int(summands[0])
+                            s2 = int(summands[1])
+                            part_size += int((s2 - s1 + 1) / divisor)
+                            if part_size <= 0:
+                                raise ValueError(f"Partition size <= 0: {part_size}")
                         temp_part_dict["NUM_ALIGNMENT_SITES"].append(part_size)
                     except Exception as e:
-                        print(f"Exception in old_raxml __read: {self.path}\n{e}")
+                        print(f"Exception in old_raxml __read partition sites: {self.path}\n{e}")
+                        print(traceback.print_exc())
                         temp_part_dict["NUM_ALIGNMENT_SITES"].append(None)
                 elif line.startswith("DataType:"):
                     value = get_value(line)
@@ -986,6 +993,7 @@ class GenesisTreeDiameter(object):  # TODO: Add genesis to ./tools/
                 subprocess.check_output(call, cwd=build_path)
         except Exception as e:
             print(e)
+            print(traceback.print_exc())
         print("Done!")
 
     def get_len_and_diam_and_height(self, tree_path1):
@@ -1003,6 +1011,7 @@ class GenesisTreeDiameter(object):  # TODO: Add genesis to ./tools/
             return float(values[-3]), float(values[-2]), float(values[-1])
         except Exception as e:
             print(e)
+            print(traceback.print_exc())
             return -1, -1, -1
 
 
@@ -1128,6 +1137,7 @@ def save_tree_dict(path, result):
     except Exception as e:
         print(e)
         print(f"Error: could not export tree dict to file: {path}")
+        print(traceback.print_exc())
 
 
 def download_trees(dest_path, result, commit_hash, grouped_result, amount=0, forced_out_dir=""):
@@ -1170,6 +1180,7 @@ def download_trees(dest_path, result, commit_hash, grouped_result, amount=0, for
             returned_paths.append(dir_path)
     except Exception as e:
         print("Error while downloading: {}".format(e))
+        print(traceback.print_exc())
 
     return returned_paths
 
@@ -1389,6 +1400,7 @@ def generate_sequences(results, args, meta_info_dict, forced_out_dir=""):
                 del grouped_results[key]
         except Exception as e:
             print(e)
+            print(traceback.print_exc())
             del grouped_results[key]
 
     key_list = list(grouped_results.keys())
@@ -1615,6 +1627,8 @@ def hopefully_somewhat_better_directory_crawl(root_path, db_object, add_new_file
 
     except Exception as e:
         print(f"Exception in directory crawl: {e}")
+        print(traceback.print_exc())
+        global_exception_counter += 1
         return
 
     if global_num_of_checked_jobs % 1000 == 0:
