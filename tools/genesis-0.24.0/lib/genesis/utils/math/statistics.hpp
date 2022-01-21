@@ -3,7 +3,7 @@
 
 /*
     Genesis - A toolkit for working with phylogenetic data.
-    Copyright (C) 2014-2020 Lucas Czech and HITS gGmbH
+    Copyright (C) 2014-2021 Lucas Czech
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -19,9 +19,9 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
     Contact:
-    Lucas Czech <lucas.czech@h-its.org>
-    Exelixis Lab, Heidelberg Institute for Theoretical Studies
-    Schloss-Wolfsbrunnenweg 35, D-69118 Heidelberg, Germany
+    Lucas Czech <lczech@carnegiescience.edu>
+    Department of Plant Biology, Carnegie Institution For Science
+    260 Panama Street, Stanford, CA 94305, USA
 */
 
 /**
@@ -348,7 +348,7 @@ inline void closure( std::vector<double>& vec )
  * If the resulting standard deviation is below the given @p epsilon (e.g, `0.0000001`), it is
  * "corrected" to be `1.0` instead. This is an inelegant (but usual) way to handle near-zero values,
  * which for some use cases would cause problems like a division by zero later on.
- * By default, @p epsilon is `-1.0`, which deactivates this check`.
+ * By default, @p epsilon is `-1.0`, which deactivates this check.
  *
  * @see mean_stddev( std::vector<double> const&, double epsilon ) for a version for `std::vector`.
  * @see arithmetic_mean() for a function that only calculates the mean, and thus saves the effort
@@ -430,7 +430,8 @@ inline MeanStddevPair mean_stddev( std::vector<double> const& vec, double epsilo
  *
  * @see arithmetic_mean( std::vector<double> const& ) for a version for `std::vector`.
  * @see mean_stddev() for a function that also calculates the standard deviation.
- * @see geometric_mean() for a function that calculates the geometric mean.
+ * @see geometric_mean() for a function that calculates the geometric mean, and
+ * @see harmonic_mean() for a function that calculates the harmonic mean.
  * @see weighted_arithmetic_mean() for a function that calculates the weighted arithmetic mean.
  */
 template <class ForwardIterator>
@@ -466,7 +467,8 @@ double arithmetic_mean( ForwardIterator first, ForwardIterator last )
  *
  * @see arithmetic_mean( ForwardIterator first, ForwardIterator last ) for details.
  * @see mean_stddev() for a function that simultaneously calculates the standard deviation.
- * @see geometric_mean() for a function that calculates the geometric mean.
+ * @see geometric_mean() for a function that calculates the geometric mean, and
+ * @see harmonic_mean() for a function that calculates the harmonic mean.
  */
 inline double arithmetic_mean( std::vector<double> const& vec )
 {
@@ -485,8 +487,10 @@ inline double arithmetic_mean( std::vector<double> const& vec )
  *
  * @see weighted_arithmetic_mean( std::vector<double> const& ) for a version for `std::vector`.
  * @see arithmetic_mean() for the unweighted version.
- * @see geometric_mean() for a function that calculates the geometric mean.
- * @see weighted_geometric_mean() for a function that calculates the weighted geometric mean.
+ * @see geometric_mean() for a function that calculates the geometric mean, and
+ * @see harmonic_mean() for a function that calculates the harmonic mean.
+ * @see weighted_geometric_mean() for a function that calculates the weighted geometric mean, and
+ * @see weighted_harmonic_mean() for a function that calculates the weighted harmonic mean.
  */
 template <class ForwardIterator>
 double weighted_arithmetic_mean(
@@ -498,17 +502,21 @@ double weighted_arithmetic_mean(
     size_t cnt = 0;
 
     // Multiply elements.
-    for_each_finite_pair( first_value, last_value, first_weight, last_weight, [&]( double value, double weight ){
-        if( weight < 0.0 ) {
-            throw std::invalid_argument(
-                "Cannot calculate weighted arithmetic mean with negative weights."
-            );
-        }
+    for_each_finite_pair(
+        first_value, last_value,
+        first_weight, last_weight,
+        [&]( double value, double weight ){
+            if( weight < 0.0 ) {
+                throw std::invalid_argument(
+                    "Cannot calculate weighted arithmetic mean with negative weights."
+                );
+            }
 
-        num += weight * value;
-        den += weight;
-        ++cnt;
-    });
+            num += weight * value;
+            den += weight;
+            ++cnt;
+        }
+    );
 
     // If there are no valid elements, return an all-zero result.
     if( cnt == 0 ) {
@@ -531,8 +539,10 @@ double weighted_arithmetic_mean(
  *
  * @see weighted_arithmetic_mean( ForwardIterator first, ForwardIterator last ) for details.
  * @see arithmetic_mean() for the unweighted version.
- * @see geometric_mean() for a function that calculates the geometric mean.
- * @see weighted_geometric_mean() for a function that calculates the weighted geometric mean.
+ * @see geometric_mean() for a function that calculates the geometric mean, and
+ * @see harmonic_mean() for a function that calculates the harmonic mean.
+ * @see weighted_geometric_mean() for a function that calculates the weighted geometric mean, and
+ * @see weighted_harmonic_mean() for a function that calculates the weighted harmonic mean.
  */
 inline double weighted_arithmetic_mean(
     std::vector<double> const& values,
@@ -557,7 +567,8 @@ inline double weighted_arithmetic_mean(
  *
  * @see geometric_mean( std::vector<double> const& ) for a version for `std::vector`.
  * @see weighted_geometric_mean() for a weighted version.
- * @see arithmetic_mean() for a function that calculates the arithmetic mean.
+ * @see arithmetic_mean() for a function that calculates the arithmetic mean, and
+ * @see harmonic_mean() for a function that calculates the harmonic mean.
  */
 template <class ForwardIterator>
 double geometric_mean( ForwardIterator first, ForwardIterator last )
@@ -596,7 +607,8 @@ double geometric_mean( ForwardIterator first, ForwardIterator last )
  * @brief Calculate the geometric mean of a `std::vector` of `double` elements.
  *
  * @see geometric_mean( ForwardIterator first, ForwardIterator last ) for details.
- * @see arithmetic_mean() for a function that calculates the arithmetic mean.
+ * @see arithmetic_mean() for a function that calculates the arithmetic mean, and
+ * @see harmonic_mean() for a function that calculates the harmonic mean.
  */
 inline double geometric_mean( std::vector<double> const& vec )
 {
@@ -628,8 +640,10 @@ inline double geometric_mean( std::vector<double> const& vec )
  *
  * @see weighted_geometric_mean( std::vector<double> const&, std::vector<double> const& ) for a version for `std::vector`.
  * @see geometric_mean() for the unweighted version.
- * @see arithmetic_mean() for a function that calculates the arithmetic mean.
- * @see weighted_arithmetic_mean() for a function that calculates the weighted arithmetic mean.
+ * @see arithmetic_mean() for a function that calculates the arithmetic mean, and
+ * @see harmonic_mean() for a function that calculates the harmonic mean.
+ * @see weighted_arithmetic_mean() for a function that calculates the weighted arithmetic mean, and
+ * @see weighted_harmonic_mean() for a function that calculates the weighted harmonic mean.
  */
 template <class ForwardIterator>
 double weighted_geometric_mean(
@@ -641,22 +655,26 @@ double weighted_geometric_mean(
     size_t cnt = 0;
 
     // Multiply elements.
-    for_each_finite_pair( first_value, last_value, first_weight, last_weight, [&]( double value, double weight ){
-        if( value <= 0.0 ) {
-            throw std::invalid_argument(
-                "Cannot calculate weighted geometric mean of non-positive values."
-            );
-        }
-        if( weight < 0.0 ) {
-            throw std::invalid_argument(
-                "Cannot calculate weighted geometric mean with negative weights."
-            );
-        }
+    for_each_finite_pair(
+        first_value, last_value,
+        first_weight, last_weight,
+        [&]( double value, double weight ){
+            if( value <= 0.0 ) {
+                throw std::invalid_argument(
+                    "Cannot calculate weighted geometric mean of non-positive values."
+                );
+            }
+            if( weight < 0.0 ) {
+                throw std::invalid_argument(
+                    "Cannot calculate weighted geometric mean with negative weights."
+                );
+            }
 
-        num += weight * std::log( value );
-        den += weight;
-        ++cnt;
-    });
+            num += weight * std::log( value );
+            den += weight;
+            ++cnt;
+        }
+    );
 
     // If there are no valid elements, return an all-zero result.
     if( cnt == 0 ) {
@@ -680,14 +698,303 @@ double weighted_geometric_mean(
  *
  * @see weighted_geometric_mean( ForwardIterator first, ForwardIterator last ) for details.
  * @see geometric_mean() for the unweighted version.
- * @see arithmetic_mean() for a function that calculates the arithmetic mean.
- * @see weighted_arithmetic_mean() for a function that calculates the weighted arithmetic mean.
+ * @see arithmetic_mean() for a function that calculates the arithmetic mean, and
+ * @see harmonic_mean() for a function that calculates the harmonic mean.
+ * @see weighted_arithmetic_mean() for a function that calculates the weighted arithmetic mean, and
+ * @see weighted_harmonic_mean() for a function that calculates the weighted harmonic mean.
  */
 inline double weighted_geometric_mean(
     std::vector<double> const& values,
     std::vector<double> const& weights
 ) {
     return weighted_geometric_mean( values.begin(), values.end(), weights.begin(), weights.end() );
+}
+
+// =================================================================================================
+//     Harmoic Mean
+// =================================================================================================
+
+/**
+ * @brief Select a policy on how to treat zeroes in the computation of harmonic_mean()
+ * and weighted_harmonic_mean().
+ */
+enum class HarmonicMeanZeroPolicy
+{
+    /**
+     * @brief Throw an exception when a zero value is encountered in the data.
+     */
+    kThrow,
+
+    /**
+     * @brief Ignore any zero values.
+     */
+    kIgnore,
+
+    /**
+     * @brief If any zero value is encountered in the data, simply return zero as the harmonic mean.
+     *
+     * This is for example the interpretation of using the harmonic mean to compute the average
+     * resistance of a set of resistors in parallel, where one zero-resistance resistor would lead
+     * to the whole set having zero resistance.
+     */
+    kReturnZero,
+
+    /**
+     * @brief Apply a zero-value correction.
+     *
+     * The correction is computed as
+     *
+     * \f$ \mu_h = \frac{N_T - N_0}{\sum^{N_T - N_0}_{i=1} \frac{1}{x_i}} \times \frac{N_T - N_0} {N_T} \f$
+     *
+     * where \f$ \mu_h \f$ is harmonic mean, \f$ x_i \f$ are the non-zero values of the data only,
+     * \f$ N_T \f$ is the (total) sample size, and \f$ N_0 \f$ is the number of zero values.
+     *
+     * This follows the EPA (Environmental Protection Agency) program DFLOW, see
+     * https://www.epa.gov/ceam/dflow and https://rdrr.io/cran/lmomco/man/harmonic.mean.html
+     */
+    kCorrection
+};
+
+/**
+ * @brief Calculate the harmonic mean of a range of positive numbers.
+ *
+ * The iterators @p first and @p last need to point to a range of `double` values,
+ * with @p last being the past-the-end element.
+ * The function then calculates the harmonic mean of all non-negative or positive (depending on the
+ * @p zero_policy) finite elements in the range.
+ * If no elements are finite, or if the range is empty, the returned value is `0.0`.
+ * Non-finite numbers are ignored. If finite negative numbers are found, an exception is thrown.
+ * Zero values are treated according to the @p zero_policy.
+ *
+ * @see harmonic_mean( std::vector<double> const& ) for a version for `std::vector`.
+ * @see weighted_harmonic_mean() for a weighted version.
+ * @see arithmetic_mean() for a function that calculates the arithmetic mean, and
+ * @see geometric_mean() for a function that calculates the geometric mean.
+ */
+template <class ForwardIterator>
+double harmonic_mean(
+    ForwardIterator first, ForwardIterator last,
+    HarmonicMeanZeroPolicy zero_policy = HarmonicMeanZeroPolicy::kThrow
+) {
+    // Keep track of the total sum of inverses, the count of how many samples were used in total
+    // (this excludes non-finite data points), and the number of zero value found, which is only
+    // used with HarmonicMeanZeroPolicy::kCorrection
+    double sum    = 0.0;
+    size_t count  = 0;
+    size_t zeroes = 0;
+
+    // Iterate elements. For numeric stability, we use sum of logs instead of products;
+    // otherwise, we run into overflows too quickly!
+    auto it = first;
+    while( it != last ) {
+        if( std::isfinite( *it ) ) {
+            if( *it < 0.0 ) {
+                throw std::invalid_argument(
+                    "Cannot calculate harmonic mean of negative values."
+                );
+            }
+
+            if( *it > 0.0 ) {
+                sum += 1.0 / static_cast<double>( *it );
+                ++count;
+            } else {
+                assert( *it == 0.0 );
+                switch( zero_policy ) {
+                    case HarmonicMeanZeroPolicy::kThrow: {
+                        throw std::invalid_argument(
+                            "Zero value found when calculating harmonic mean."
+                        );
+                    }
+                    case HarmonicMeanZeroPolicy::kIgnore: {
+                        // Do nothing.
+                        break;
+                    }
+                    case HarmonicMeanZeroPolicy::kReturnZero: {
+                        // If any value is zero, we do not need to finish the iteration.
+                        return 0.0;
+                    }
+                    case HarmonicMeanZeroPolicy::kCorrection: {
+                        // Increment both counters, but do not add anything to the sum.
+                        ++count;
+                        ++zeroes;
+                        break;
+                    }
+                }
+            }
+        }
+        ++it;
+    }
+
+    // If there are no valid elements, or all of them are zero, return an all-zero result.
+    if( count == 0 || count == zeroes ) {
+        return 0.0;
+    }
+    assert( count > 0 );
+    assert( count > zeroes );
+    assert( std::isfinite( sum ));
+
+    // Return the result. We always compute the correction,
+    // which however does not alter the result if not used.
+    auto const correction = static_cast<double>( count - zeroes ) / static_cast<double>( count );
+    return correction * static_cast<double>( count - zeroes ) / sum;
+}
+
+/**
+ * @brief Calculate the harmonic mean of a `std::vector` of `double` elements.
+ *
+ * @see harmonic_mean( ForwardIterator first, ForwardIterator last ) for details.
+ * @see arithmetic_mean() for a function that calculates the arithmetic mean, and
+ * @see geometric_mean() for a function that calculates the geometric mean.
+ */
+inline double harmonic_mean(
+    std::vector<double> const& vec,
+    HarmonicMeanZeroPolicy zero_policy = HarmonicMeanZeroPolicy::kThrow
+) {
+    return harmonic_mean( vec.begin(), vec.end(), zero_policy );
+}
+
+/**
+ * @brief Calculate the weighted harmonic mean of a range of positive numbers.
+ *
+ * The iterators @p first_value and @p last_value, as well as @p first_weight and @p last_weight,
+ * need to point to ranges of `double` values, with @p last_value and @p last_weight being the
+ * past-the-end elements. Both ranges need to have the same size.
+ * The function then calculates the weighted harmonic mean of all non-negative or positive
+ * (depending on the @p zero_policy) finite elements in the range.
+ * If no elements are finite, or if the range is empty, the returned value is `0.0`.
+ * Non-finite numbers are ignored. If finite negative numbers are found, an exception is thrown.
+ * Zero values are treated according to the @p zero_policy. The weights have to be non-negative,
+ * and elements with non-finite weights are skipped.
+ *
+ * For a set of values \f$ v \f$ and a set of weights \f$ w \f$,
+ * the weighted harmonic mean \f$ g \f$ is calculated following [1]:
+ *
+ * \f$ h = \frac{ \sum w }{ \sum \frac{ w }{ v } } \f$
+ *
+ * That is, if all weights are `1.0`, the formula yields the standard harmonic mean.
+ *
+ * @see weighted_harmonic_mean( std::vector<double> const&, std::vector<double> const& ) for a version for `std::vector`.
+ * @see harmonic_mean() for the unweighted version.
+ * @see arithmetic_mean() for a function that calculates the arithmetic mean, and
+ * @see geometric_mean() for a function that calculates the geometric mean.
+ * @see weighted_arithmetic_mean() for a function that calculates the weighted arithmetic mean, and
+ * @see weighted_geometric_mean() for a function that calculates the weighted geometric mean.
+ */
+template <class ForwardIterator>
+double weighted_harmonic_mean(
+    ForwardIterator first_value,  ForwardIterator last_value,
+    ForwardIterator first_weight, ForwardIterator last_weight,
+    HarmonicMeanZeroPolicy zero_policy = HarmonicMeanZeroPolicy::kThrow
+) {
+    // Keep track of the numerator (sum of all weights of positive values) and denominator
+    // (sum of weights divided by values) of the summation, as well as the sum of all weights
+    // (which can be different from the numerator, if there are zero values), the total number of
+    // values used, and the number of zero values found.
+    double weights = 0.0;
+    double num     = 0.0;
+    double den     = 0.0;
+    size_t count   = 0;
+    size_t zeroes  = 0;
+
+    // Multiply elements, only considering finite ones.
+    for_each_finite_pair(
+        first_value, last_value,
+        first_weight, last_weight,
+        [&]( double value, double weight ){
+            if( value < 0.0 ) {
+                throw std::invalid_argument(
+                    "Cannot calculate weighted harmonic mean of negative values."
+                );
+            }
+            if( weight < 0.0 ) {
+                throw std::invalid_argument(
+                    "Cannot calculate weighted harmonic mean with negative weights."
+                );
+            }
+            if( value > 0.0 ) {
+                weights += weight;
+                num     += weight;
+                den     += weight / static_cast<double>( value );
+                ++count;
+            } else {
+                assert( value == 0.0 );
+                switch( zero_policy ) {
+                    case HarmonicMeanZeroPolicy::kThrow: {
+                        throw std::invalid_argument(
+                            "Zero value found when calculating weighted harmonic mean."
+                        );
+                    }
+                    case HarmonicMeanZeroPolicy::kIgnore: {
+                        // Do nothing.
+                        break;
+                    }
+                    case HarmonicMeanZeroPolicy::kReturnZero:
+                    case HarmonicMeanZeroPolicy::kCorrection:{
+                        // Increment the sum of all weights, so that zero values are contributing
+                        // to the corrected result according to their weight, and increment
+                        // both counters, but do not add anything to the sums.
+                        // In case of the return zero policy, we use the zeroes counter as a flag
+                        // indicating that we have found a zero value.
+                        weights += weight;
+                        ++count;
+                        ++zeroes;
+                        break;
+                    }
+                }
+            }
+        }
+    );
+
+    // If there are no valid elements, or all of them are zero, return an all-zero result.
+    if( count == 0 || count == zeroes ) {
+        return 0.0;
+    }
+    // For the return zero policy, if one of them is zero, return zero.
+    if( zero_policy == HarmonicMeanZeroPolicy::kReturnZero && zeroes > 0 ) {
+        return 0.0;
+    }
+    if( num == 0.0 || den == 0.0 ) {
+        throw std::invalid_argument(
+            "Cannot calculate weighted harmonic mean with all weights being 0."
+        );
+    }
+    if( zeroes == 0 ) {
+        (void) zeroes;
+        assert( weights == num );
+    }
+    assert( count > 0 );
+    assert( count > zeroes );
+    assert( weights >= num );
+    assert( std::isfinite( num ) && ( num > 0.0 ));
+    assert( std::isfinite( den ) && ( den > 0.0 ));
+    assert( std::isfinite( weights ) && ( weights > 0.0 ));
+
+    // Return the result. We always compute the correction,
+    // which however does not alter the result if not used.
+    auto const correction = num / weights;
+    return correction * num / den;
+}
+
+/**
+ * @brief Calculate the weighted harmonic mean of a `std::vector` of `double` elements.
+ *
+ * @see weighted_harmonic_mean( ForwardIterator first, ForwardIterator last ) for details.
+ * @see harmonic_mean() for the unweighted version.
+ * @see arithmetic_mean() for a function that calculates the arithmetic mean, and
+ * @see geometric_mean() for a function that calculates the geometric mean.
+ * @see weighted_arithmetic_mean() for a function that calculates the weighted arithmetic mean, and
+ * @see weighted_geometric_mean() for a function that calculates the weighted geometric mean.
+ */
+inline double weighted_harmonic_mean(
+    std::vector<double> const& values,
+    std::vector<double> const& weights,
+    HarmonicMeanZeroPolicy zero_policy = HarmonicMeanZeroPolicy::kThrow
+) {
+    return weighted_harmonic_mean(
+        values.begin(), values.end(),
+        weights.begin(), weights.end(),
+        zero_policy
+    );
 }
 
 // =================================================================================================
@@ -907,11 +1214,15 @@ double pearson_correlation_coefficient(
     double mean_a = 0.0;
     double mean_b = 0.0;
     size_t count = 0;
-    for_each_finite_pair( first_a, last_a, first_b, last_b, [&]( double val_a, double val_b ){
-        mean_a += val_a;
-        mean_b += val_b;
-        ++count;
-    });
+    for_each_finite_pair(
+        first_a, last_a,
+        first_b, last_b,
+        [&]( double val_a, double val_b ){
+            mean_a += val_a;
+            mean_b += val_b;
+            ++count;
+        }
+    );
     if( count == 0 ) {
         return std::numeric_limits<double>::quiet_NaN();
     }
@@ -923,13 +1234,17 @@ double pearson_correlation_coefficient(
     double numerator = 0.0;
     double std_dev_a = 0.0;
     double std_dev_b = 0.0;
-    for_each_finite_pair( first_a, last_a, first_b, last_b, [&]( double val_a, double val_b ){
-        double const d1 = val_a - mean_a;
-        double const d2 = val_b - mean_b;
-        numerator += d1 * d2;
-        std_dev_a += d1 * d1;
-        std_dev_b += d2 * d2;
-    });
+    for_each_finite_pair(
+        first_a, last_a,
+        first_b, last_b,
+        [&]( double val_a, double val_b ){
+            double const d1 = val_a - mean_a;
+            double const d2 = val_b - mean_b;
+            numerator += d1 * d2;
+            std_dev_a += d1 * d1;
+            std_dev_b += d2 * d2;
+        }
+    );
 
     // Calculate PCC, and assert that it is in the correct range
     // (or not a number, which can happen if the std dev is 0.0, e.g. in all-zero vectors).

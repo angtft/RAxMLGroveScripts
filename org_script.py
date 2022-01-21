@@ -83,11 +83,12 @@ SEQGEN_PATH = os.path.join(BASE_FILE_DIR, "tools", "Seq-Gen-1.3.4")
 GENESIS_PATH = os.path.join(BASE_FILE_DIR, "tools", "genesis-0.24.0")
 
 
-def get_tukeys_fences(lst):
+def get_tukeys_fences(lst, k=1.5):
     """
     Computes the Tukey's fences for values in a given list and returns the low and high fences. Values below the lower
     fence and above the higher fence are considered to be outlier.
     @param lst: list with numerical values
+    @param k: a nonnegative constant, usually 1.5
     @return: low fence, high fence
     """
 
@@ -108,8 +109,6 @@ def get_tukeys_fences(lst):
         q1 = statistics.median(low_half_of_list)
         q3 = statistics.median(high_half_of_list)
         iqr = q3 - q1
-
-        k = 1.5
 
         low_fence = q1 - k * iqr
         high_fence = q3 + k * iqr
@@ -1156,9 +1155,9 @@ def download_trees(dest_path, result, commit_hash, grouped_result, amount=0, for
     tree_keys = list(grouped_result.keys())
     try:
         for i in range(amount):
-            current_key = tree_keys[i]
-            dct = grouped_result[current_key]
-            tree_id = dct[0]["TREE_ID"]
+            current_key = i % len(result)
+            dct = result[current_key]
+            tree_id = dct["TREE_ID"]
             print(f"downloading {tree_id}")
             dir_path = os.path.join(dest_path, tree_id) if not forced_out_dir else os.path.join(dest_path,
                                                                                                 forced_out_dir)
@@ -1217,17 +1216,12 @@ def get_tree_info(src_path, tree_id):
         tree = Phylo.read(src_path, "newick")
         num_leaves, branch_length_list = count_tree_leaves(tree.root)
         try:
-            diamcalc = GenesisTreeDiameter(GENESIS_PATH)  # TODO: don't do it with genesis
+            diamcalc = GenesisTreeDiameter(GENESIS_PATH)  # TODO: maybe don't do it with genesis
+            tree_len, tree_diam, tree_height = diamcalc.get_len_and_diam_and_height(src_path)
         except Exception as e:
             print("Genesis exception: {}".format(e))
             diamcalc = -1
-
-        if num_leaves < 20000:  # TODO: fix(?). trees above this size make genesis eat too much ram :'(
-            tree_len, tree_diam, tree_height = diamcalc.get_len_and_diam_and_height(src_path)
-        else:
-            print("tree too big! num taxa: {}".format(num_leaves))
-            global_num_of_too_big_trees += 1
-            tree_len = tree_diam = -1
+            tree_len, tree_diam, tree_height = -1
 
         ret_dct["TREE_ID"] = tree_id  # TODO: remember to change!
         ret_dct["NUM_TAXA"] = num_leaves
@@ -1706,7 +1700,7 @@ def print_statistics(db_object, query):
               f"median {statistics.median(cat_float_values[cat])}")
 
         if len(filtered_values) > 0:
-            print(f"  without outliers:\n"
+            print(f"  without outliers (k=1.5):\n"
                   f"    lower/upper fence {(lower_fence, upper_fence)}\n"
                   f"    min {min(filtered_values)} max {max(filtered_values)}\n"
                   f"    mean {statistics.mean(filtered_values)} "
@@ -1839,6 +1833,7 @@ def main(args_list, is_imported=True):
             # Categories we currently filter outliers for
             categories = {  # TODO: make this work for AA (and all the other stuff)
                 "NUM_TAXA": 0,
+                #"OVERALL_NUM_ALIGNMENT_SITES": 0,
                 "TREE_DIAMETER": 0,
                 "BRANCH_LENGTH_VARIANCE": 0,
                 "RATE_AC": 0,

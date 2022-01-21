@@ -3,7 +3,7 @@
 
 /*
     Genesis - A toolkit for working with phylogenetic data.
-    Copyright (C) 2014-2020 Lucas Czech and HITS gGmbH
+    Copyright (C) 2014-2021 Lucas Czech
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -19,9 +19,9 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
     Contact:
-    Lucas Czech <lucas.czech@h-its.org>
-    Exelixis Lab, Heidelberg Institute for Theoretical Studies
-    Schloss-Wolfsbrunnenweg 35, D-69118 Heidelberg, Germany
+    Lucas Czech <lczech@carnegiescience.edu>
+    Department of Plant Biology, Carnegie Institution For Science
+    260 Panama Street, Stanford, CA 94305, USA
 */
 
 /**
@@ -33,6 +33,7 @@
 
 #include "genesis/utils/io/char.hpp"
 
+#include <algorithm>
 #include <cctype>
 #include <functional>
 #include <iostream>
@@ -66,6 +67,43 @@ bool starts_with( std::string const & text, std::string const & start );
  * @brief Return whether a string ends with another string.
  */
 bool ends_with(   std::string const & text, std::string const & ending );
+
+/**
+ * @brief Return whether a string is matched by a wildcard pattern containing `?` and `*`
+ * for single and mutliple (0 or more) wildcard characters, respectively.
+ */
+bool match_wildcards( std::string const& str, std::string const& pattern );
+
+/**
+ * @brief Compare two strings with natural human sorting, that is "A1", "A2", "A100", instead of the
+ * standard sort by ASCII value "A1", "A100", "A2".
+ *
+ * Returns negavie if @p lhs < @p rhs, `0` if they are equal, and positive if @p lhs > @p rhs.
+ */
+int compare_natural( std::string const& lhs, std::string const& rhs );
+
+/**
+ * @brief Functor class to compare to strings with natural "human" sorting, see compare_natural().
+ */
+template <class T = std::string>
+struct NaturalLess : public std::binary_function<T, T, bool> {
+    bool operator()( T const& lhs, T const& rhs ) const {
+        return compare_natural( lhs, rhs ) < 0;
+    }
+};
+
+/**
+ * @brief Sort a range of std::string (or convertible to std::string) elements, using natural
+ * sorting; see compare_natural().
+ */
+template <typename RandomAccessIterator>
+inline void sort_natural(
+    RandomAccessIterator first,
+    RandomAccessIterator last
+) {
+    using T = typename RandomAccessIterator::value_type;
+    std::sort( first, last, NaturalLess<T>() );
+}
 
 // =================================================================================================
 //     Substrings
@@ -399,6 +437,58 @@ std::string join( T const& v, std::string const& delimiter = ", " )
         s << i;
     }
     return s.str();
+}
+
+/**
+ * @brief Template specialization of join() for vector of unsigned char.
+ *
+ * We need this specialization, as the unsigned chars are otherwise turned into their char (ASCII)
+ * equivalent, which we do not want. Instead, we want to output them here as plain numbers.
+ */
+template <>
+inline std::string join<std::vector<unsigned char>>(
+    std::vector<unsigned char> const& v, std::string const& delimiter
+) {
+    std::ostringstream s;
+    for( auto const& i : v ) {
+        if( &i != &(*v.begin()) ) {
+            s << delimiter;
+        }
+        s << static_cast<int>( i );
+    }
+    return s.str();
+}
+
+/**
+ * @brief Return the bit representation of an unsigned int.
+ *
+ * For example, to_bit_string(5) yields "0...0101".
+ * Optionally, the chars to use for @p zero and @p one can be set, as well as a flag whether
+ * to put spaces in between individual bytes of the output.
+ */
+template<typename T>
+std::string to_bit_string(
+    T const x, char const zero = '0', char const one = '1', bool const byte_space = true
+) {
+    static_assert(
+        std::is_unsigned<T>::value,
+        "Can only use to_bit_string() with unsigned types."
+    );
+
+    std::string binary = "";
+    T mask = 1;
+    for( size_t i = 0; i < sizeof(T) * 8; ++i ) {
+        if( byte_space && i > 0 && i % 8 == 0 ) {
+            binary = ' ' + binary;
+        }
+        if( mask & x ) {
+            binary = one + binary;
+        } else {
+            binary = zero + binary;
+        }
+        mask <<= 1;
+    }
+    return binary;
 }
 
 } // namespace utils

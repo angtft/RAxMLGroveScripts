@@ -307,11 +307,23 @@ std::string nucleic_acid_codes_undetermined()
     return "NOX.-?";
 }
 
+std::string nucleic_acid_codes_undetermined_letters()
+{
+    return "NOX";
+}
+
 std::string nucleic_acid_codes_all()
 {
     return nucleic_acid_codes_plain()
          + nucleic_acid_codes_degenerated()
          + nucleic_acid_codes_undetermined();
+}
+
+std::string nucleic_acid_codes_all_letters()
+{
+    return nucleic_acid_codes_plain()
+         + nucleic_acid_codes_degenerated()
+         + nucleic_acid_codes_undetermined_letters();
 }
 
 // ---------------------------------------------------------------------
@@ -330,7 +342,7 @@ std::string amino_acid_codes_degenerated()
 
 std::string amino_acid_codes_undetermined()
 {
-    return "X*-?";
+    return "X*-?.";
 }
 
 std::string amino_acid_codes_all()
@@ -479,6 +491,7 @@ char normalize_amino_acid_code( char code, bool accept_degenerated )
         case '*':
         case '-':
         case '?':
+        case '.':
             return '-';
         default:
             throw std::invalid_argument( "Not an amino acid code: " + std::string( 1, code ) );

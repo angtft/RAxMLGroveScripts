@@ -1,5 +1,5 @@
 # Genesis - A toolkit for working with phylogenetic data.
-# Copyright (C) 2014-2020 Lucas Czech and HITS gGmbH
+# Copyright (C) 2014-2021 Lucas Czech
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -15,9 +15,9 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
 # Contact:
-# Lucas Czech <lucas.czech@h-its.org>
-# Exelixis Lab, Heidelberg Institute for Theoretical Studies
-# Schloss-Wolfsbrunnenweg 35, D-69118 Heidelberg, Germany
+# Lucas Czech <lczech@carnegiescience.edu>
+# Department of Plant Biology, Carnegie Institution For Science
+# 260 Panama Street, Stanford, CA 94305, USA
 
 # --------------------------------------------------------------------------------------------------
 #   CMake Init
@@ -47,7 +47,10 @@ message (STATUS "CMake version ${CMAKE_VERSION}")
 set (CMAKE_DISABLE_IN_SOURCE_BUILD ON)
 set (CMAKE_DISABLE_SOURCE_CHANGES  ON)
 
-# Add our own extra CMake functionality.
+# Include extra functionality.
+include(ExternalProject)
+
+# Include our own extra CMake functionality.
 set( CMAKE_MODULE_PATH ${CMAKE_MODULE_PATH} "${CMAKE_CURRENT_LIST_DIR}/tools/cmake" )
 include( "${CMAKE_CURRENT_LIST_DIR}/tools/cmake/AssembleMonolith.cmake" )
 
@@ -55,7 +58,15 @@ include( "${CMAKE_CURRENT_LIST_DIR}/tools/cmake/AssembleMonolith.cmake" )
 # as normal Clang. See https://cmake.org/cmake/help/v3.0/policy/CMP0025.html
 # This is important for the test cmake script, where we need to set some warnings for clang,
 # but not for apple clang.
-cmake_policy(SET CMP0025 NEW)
+# But, this policy was only introduced in CMake 3.0, which we hence need to test first;
+# this test however is cumbersome, becuase VERSION_GREATER_EQUAL was only introduced in CMake 3.7,
+# so we need to test the negated version...
+if (NOT CMAKE_VERSION VERSION_LESS 3.0)
+    # Appleclang compatibility
+    cmake_policy(SET CMP0025 NEW)
+    # Support for :: aliasing, used in new way to include OpenMP
+    cmake_policy(SET CMP0028 NEW)
+endif()
 
 # --------------------------------------------------------------------------------------------------
 #   Project Definitions and Variables
@@ -103,6 +114,7 @@ file(
 if( ${GENESIS_VERSION_LINE} MATCHES ".*\"(v.*)\".*" )
     set( GENESIS_VERSION "${CMAKE_MATCH_1}")
 endif()
+message (STATUS "OS: ${CMAKE_SYSTEM_NAME} ${CMAKE_SYSTEM_VERSION}")
 message (STATUS "${ColorBlue}Genesis version: ${GENESIS_VERSION}${ColorEnd}")
 
 # Figure out whether Genesis is compiled stand-alone or as a library/dependency.
@@ -130,18 +142,25 @@ option (GENESIS_BUILD_SHARED_LIB    "Build the shared library version of Genesis
 option (GENESIS_BUILD_STATIC_LIB    "Build the static library version of Genesis." ${GENESIS_HAS_PARENT_DIR})
 
 # If we are the master project, we want to build the apps by default.
-option (GENESIS_BUILD_APPLICATIONS  "Build Genesis applications."        ${GENESIS_IS_MASTER_PROJECT})
+option (GENESIS_BUILD_APPLICATIONS  "Build Genesis applications." ${GENESIS_IS_MASTER_PROJECT})
 
 # Currently, the Python module and tests are deactivated by default.
-option (GENESIS_BUILD_PYTHON_MODULE "Build the Genesis python module."   OFF)
-option (GENESIS_BUILD_TESTS         "Build the Genesis test suites."     OFF)
+option (GENESIS_BUILD_PYTHON_MODULE "Build the Genesis python module."                   OFF)
+option (GENESIS_BUILD_TESTS         "Build the Genesis test suites."                     OFF)
 
 # If available, use external dependencies.
-option (GENESIS_USE_ZLIB            "Use zlib."                                    ON)
+option (GENESIS_USE_ZLIB            "Use zlib."                                          ON)
 
 # We default to using threads (if available, which will be checked later).
-option (GENESIS_USE_THREADS         "Use a threading library (mainly, pthreads)."  ON)
-option (GENESIS_USE_OPENMP          "Use OpenMP."                                  ON)
+option (GENESIS_USE_THREADS         "Use a threading library (mainly, pthreads)."        ON)
+option (GENESIS_USE_OPENMP          "Use OpenMP."                                        ON)
+
+# Additional dependencies: htslib
+# We use a locally installed (in the build directory) version of htslib,
+# so that we can check out the exact commit that we want.
+# By setting `GENESIS_USE_HTSLIB OFF`, all htslib-related functionality can also be deactivated,
+# but those functions then won't be available in the library.
+option (GENESIS_USE_HTSLIB          "Use htslib. See also GENESIS_SYSTEM_HTSLIB"         ON)
 
 # Define unity build option with list of valid values. Default is full unity build.
 set( GENESIS_UNITY_BUILD FULL CACHE STRING
@@ -209,7 +228,7 @@ endif ()
 
 set (CMAKE_CXX_FLAGS         "${CMAKE_CXX_FLAGS} -std=c++11 ${WARN_FLAGS}")
 set (CMAKE_CXX_FLAGS_DEBUG   "${CMAKE_CXX_FLAGS_DEBUG} -O2 -DDEBUG -g -ggdb3 -D_GLIBCXX_DEBUG -D_GLIBCXX_DEBUG_PEDANTIC")
-set (CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O2 -DNDEBUG")
+set (CMAKE_CXX_FLAGS_RELEASE "${CMAKE_CXX_FLAGS_RELEASE} -O3 -DNDEBUG")
 
 # Misc options
 # STDCC   = clang++
@@ -237,120 +256,46 @@ endif (APPLE)
 #   External Dependencies
 # --------------------------------------------------------------------------------------------------
 
+# ----------------------------------------------------------
+#     zlib
+# ----------------------------------------------------------
+
 IF(GENESIS_USE_ZLIB)
-    message (STATUS "Looking for zlib")
-    find_package(ZLIB)
-
-    # If found, set all needed compiler flags and also add those flags to the Genesis exported flags.
-    if(ZLIB_FOUND)
-        message( STATUS "Found zlib: ${ZLIB_INCLUDE_DIRS} ${ZLIB_VERSION_STRING}" )
-        message( STATUS "${ColorGreen}Using zlib${ColorEnd}" )
-
-        # Include the headers etc
-        include_directories( ${ZLIB_INCLUDE_DIRS} )
-
-        # Set needed definition and linker flags for Genesis and for the parent scope.
-        add_definitions( "-DGENESIS_ZLIB" )
-        set( GENESIS_DEFINITIONS ${GENESIS_DEFINITIONS} " -DGENESIS_ZLIB" )
-        set( GENESIS_INTERNAL_LINK_LIBRARIES ${GENESIS_INTERNAL_LINK_LIBRARIES} ${ZLIB_LIBRARIES} )
-
-    else()
-        message( STATUS "${ColorRed}zlib not found${ColorEnd}" )
-        message( STATUS "Try installing 'zlib1g-dev' first, or the equivalent for your system." )
-        message( STATUS "To build without zlib support, call CMake with -DGENESIS_USE_ZLIB=OFF" )
-        message( FATAL_ERROR "Required package zlib not found.")
-    endif()
+    # Included from modules dir tools/cmake
+    include( IncludeZlib )
 ENDIF()
 
-# We check whether to use threads and OpenMP here,
-# so that all binaries are compiled with the same settings.
+# ----------------------------------------------------------
+#     (p)threads
+# ----------------------------------------------------------
 
 IF(GENESIS_USE_THREADS)
-    message (STATUS "Looking for Threads")
-    set (CMAKE_THREAD_PREFER_PTHREAD ON)
-    set (THREADS_PREFER_PTHREAD_FLAG ON)
-    find_package (Threads)
-
-    # If found, set all needed compiler flags and also add those flags to the Genesis exported flags.
-    if(THREADS_FOUND)
-        message( STATUS "Found Threads: ${CMAKE_THREAD_LIBS_INIT}" )
-        message( STATUS "${ColorGreen}Using Threads${ColorEnd}" )
-
-        # Set needed definition and linker flags for Genesis and for the parent scope.
-        add_definitions( "-DGENESIS_PTHREADS" )
-        set( GENESIS_DEFINITIONS ${GENESIS_DEFINITIONS} " -DGENESIS_PTHREADS" )
-        set( GENESIS_INTERNAL_LINK_LIBRARIES ${GENESIS_INTERNAL_LINK_LIBRARIES} ${CMAKE_THREAD_LIBS_INIT} )
-
-    else()
-        message( STATUS "${ColorRed}Threads not found${ColorEnd}" )
-        message( STATUS "To build without threading support, call CMake with -DGENESIS_USE_THREADS=OFF" )
-        message( FATAL_ERROR "Required package threads not found.")
-    endif()
-
+    # Included from modules dir tools/cmake
+    include( IncludePthreads )
 ENDIF()
+
+# ----------------------------------------------------------
+#     OpenMP
+# ----------------------------------------------------------
 
 IF(GENESIS_USE_OPENMP)
-    message (STATUS "Looking for OpenMP")
-
-    # CMake versions before 3.5 do not properly support Clang OpenMP flags.
-    # And even with more recent CMake versions, it is not fully working.
-    # In order to still enable OpenMP, we use our own patch of the find module.
-    # See ./tools/cmake/FindOpenMP_patch.cmake for the modifications we made to support Clang.
-    if( "${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang" )
-
-        find_package( OpenMP_patch )
-
-        # If our patch does not work, try the standard one, just in case.
-        if( NOT OPENMP_FOUND )
-            unset(OpenMP_CXX_FLAGS)
-            unset(OpenMP_CXX_FLAGS CACHE)
-            find_package( OpenMP )
-        endif()
-
-    else()
-        # In all other cases, use the normal find module.
-        find_package( OpenMP )
-    endif()
-
-    # If found, set all needed compiler flags and also add those flags to the Genesis exported flags.
-    if(OPENMP_FOUND)
-
-        message( STATUS "Found OpenMP: ${OpenMP_CXX_FLAGS}" )
-        message (STATUS "${ColorGreen}Using OpenMP${ColorEnd}")
-
-        # Set needed definition for Genesis and for the parent scope.
-        add_definitions( "-DGENESIS_OPENMP" )
-        set( GENESIS_DEFINITIONS ${GENESIS_DEFINITIONS} " -DGENESIS_OPENMP" )
-
-        # Set the flags needed for compiling Genesis.
-        set( CMAKE_C_FLAGS            "${CMAKE_C_FLAGS}            ${OpenMP_C_FLAGS}")
-        set( CMAKE_CXX_FLAGS          "${CMAKE_CXX_FLAGS}          ${OpenMP_CXX_FLAGS}" )
-        set( CMAKE_EXE_LINKER_FLAGS   "${CMAKE_EXE_LINKER_FLAGS}   ${OpenMP_EXE_LINKER_FLAGS}" )
-
-        # Set the flags that are exported to parent scope so that the parent can also compile using
-        # the those flags.
-        set( GENESIS_C_FLAGS          "${GENESIS_C_FLAGS}          ${OpenMP_C_FLAGS}" )
-        set( GENESIS_CXX_FLAGS        "${GENESIS_CXX_FLAGS}        ${OpenMP_CXX_FLAGS}" )
-        set( GENESIS_EXE_LINKER_FLAGS "${GENESIS_EXE_LINKER_FLAGS} ${OpenMP_EXE_LINKER_FLAGS}" )
-
-    else()
-        message( STATUS "${ColorRed}OpenMP not found${ColorEnd}" )
-
-        # Special warning for users that have a Clang version that supports OpenMP, but where
-        # the find module still did not succeed.
-        if(
-            "${CMAKE_CXX_COMPILER_ID}" MATCHES "Clang"
-            AND NOT ${CMAKE_CXX_COMPILER_VERSION} VERSION_LESS 3.8
-        )
-            message (STATUS "${ColorYellow}You are trying to compile with Clang and OpenMp. "
-            "This does not seem to work right now. Try installing 'libiomp-dev' first.${ColorEnd}")
-        endif()
-
-        message( STATUS "To build without OpenMP support, call CMake with -DGENESIS_USE_OPENMP=OFF" )
-        message( FATAL_ERROR "Required package OpenMP not found.")
-    endif()
-
+    # Included from modules dir tools/cmake
+    include( IncludeOpenMP )
 ENDIF()
+
+# ----------------------------------------------------------
+#     htslib
+# ----------------------------------------------------------
+
+if(GENESIS_USE_HTSLIB)
+
+    # Store the commit hash that we want to check out for htslib.
+    SET( htslib_COMMIT_HASH "bd133acf51498431a5c7dfd8aa06ce17ec6d3b96" ) #htslib_COMMIT_HASH#
+
+    # Included from modules dir tools/cmake
+    include( IncludeHtslib )
+
+endif()
 
 # --------------------------------------------------------------------------------------------------
 #   Sub-Scripts

@@ -59,8 +59,8 @@ namespace utils {
  * The output target returned from this function can be used in the writer classes, e.g.,
  * placement::JplaceWriter or sequence::FastaWriter.
  *
- * If @p compression_level is set to a compression level other than ::GzipCompressionLevel::kNoCompression
- * (which is the default, which means, no compression by default), the output is compressed using
+ * If @p compression_level is set to a compression level other than
+ * ::GzipCompressionLevel::kNoCompression, the output is compressed using
  * gzip. We recommend to use ::GzipCompressionLevel::kDefaultCompression%.
  *
  * Furthermore, if @p auto_adjust_filename is set to `true` (default), the file name is
@@ -73,10 +73,14 @@ namespace utils {
  * Also, by default, if the file already exists, an exception is thrown. See
  * @link utils::Options::allow_file_overwriting( bool ) Options::allow_file_overwriting()@endlink
  * to change this behaviour.
+ *
+ * See also to_gzip_block_file() for a version that offers multithreaded gzip compression
+ * using blocks of compressed data.
  */
 inline std::shared_ptr<BaseOutputTarget> to_file(
     std::string const& file_name,
-    GzipCompressionLevel compression_level = GzipCompressionLevel::kNoCompression,
+    GzipCompressionLevel compression_level,
+    // GzipCompressionLevel compression_level = GzipCompressionLevel::kNoCompression,
     bool auto_adjust_filename = true
 ) {
     auto fn = file_name;
@@ -95,9 +99,67 @@ inline std::shared_ptr<BaseOutputTarget> to_file(
 
     // Without compression. Not in the `else` branch, to not confuse old compilers.
     if( auto_adjust_filename && ext == "gz" ) {
-        fn.erase( fn.size() - 2 );
+        fn.erase( fn.size() - 3 );
     }
     return std::make_shared< FileOutputTarget >( fn );
+}
+
+/**
+ * @brief Obtain an output target for writing to a file, using a specific output mode.
+ *
+ * The output target returned from this function can be used in the writer classes, e.g.,
+ * placement::JplaceWriter or sequence::FastaWriter.
+ *
+ * This version of the function allows to explicitly set the `openmode`, which is for example useful
+ * to append to an existing file, or to open it in binary mode.
+ */
+inline std::shared_ptr<BaseOutputTarget> to_file(
+    std::string const& file_name,
+    std::ios_base::openmode mode = std::ios_base::out
+) {
+    return std::make_shared< FileOutputTarget >( file_name, mode );
+}
+
+/**
+ * @brief Obtain an output target for writing gzip block compressed data to a file.
+ *
+ * This output target uses multithreaded gzip compression by block-compressing chunks of data.
+ * See GzipBlockOStream for an explanation and more details on this technique and the parameters
+ * offered here.
+ *
+ * For general details on using this output target for writing data, see to_file().
+ *
+ * @see GzipBlockOStream
+ * @see GzipBlockOutputTarget
+ * @see to_file()
+ */
+inline std::shared_ptr<BaseOutputTarget> to_gzip_block_file(
+    std::string const& file_name,
+    std::size_t block_size = GzipBlockOStream::GZIP_DEFAULT_BLOCK_SIZE,
+    GzipCompressionLevel compression_level = GzipCompressionLevel::kDefaultCompression,
+    std::size_t num_threads = 0,
+    bool auto_adjust_filename = true
+) {
+    if( compression_level == GzipCompressionLevel::kNoCompression ) {
+        throw std::invalid_argument(
+            "Cannot use compression level kNoCompression with a gzip block output."
+        );
+    }
+
+    // Adjust filename if needed and wanted
+    auto fn = file_name;
+    auto const ext = file_extension( fn );
+    if( auto_adjust_filename && ext != "gz" ) {
+        fn += ".gz";
+    }
+
+    // Return the wrapped streams
+    return std::make_shared<GzipBlockOutputTarget>(
+        std::make_shared< FileOutputTarget >( fn, std::ios_base::out | std::ios_base::binary ),
+        block_size,
+        compression_level,
+        num_threads
+    );
 }
 
 /**

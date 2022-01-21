@@ -3,7 +3,7 @@
 
 /*
     Genesis - A toolkit for working with phylogenetic data.
-    Copyright (C) 2014-2019 Lucas Czech and HITS gGmbH
+    Copyright (C) 2014-2021 Lucas Czech
 
     This program is free software: you can redistribute it and/or modify
     it under the terms of the GNU General Public License as published by
@@ -19,9 +19,9 @@
     along with this program.  If not, see <http://www.gnu.org/licenses/>.
 
     Contact:
-    Lucas Czech <lucas.czech@h-its.org>
-    Exelixis Lab, Heidelberg Institute for Theoretical Studies
-    Schloss-Wolfsbrunnenweg 35, D-69118 Heidelberg, Germany
+    Lucas Czech <lczech@carnegiescience.edu>
+    Department of Plant Biology, Carnegie Institution For Science
+    260 Panama Street, Stanford, CA 94305, USA
 */
 
 /**
@@ -64,6 +64,8 @@ namespace utils {
  *
  * Since this is not available in C++11, we need our own implementation.
  * It is following http://herbsutter.com/gotw/_102/
+ * When using this function, make sure to specify at least the `utils` namespace, even from within
+ * that namespace, in order to avoid name overloads if compiled with C++17.
  */
 template<typename T, typename... Args>
 std::unique_ptr<T> make_unique(Args&&... args)
@@ -95,13 +97,13 @@ private:
 };
 
 template <typename T>
-inline std::size_t hash_combine_32( std::size_t seed, T const& value )
+inline constexpr std::size_t hash_combine_32( std::size_t seed, T const& value )
 {
     return seed ^ ( std::hash<T>()( value ) + 0x9e3779b9 + ( seed << 6 ) + ( seed >> 2 ));
 }
 
 template <typename T>
-inline std::size_t hash_combine_64( std::size_t seed, T const& value )
+inline constexpr std::size_t hash_combine_64( std::size_t seed, T const& value )
 {
     return seed ^ ( std::hash<T>()( value ) + 0x9e3779b97f4a7c16 + ( seed << 12 ) + ( seed >> 4 ));
 }
@@ -110,7 +112,7 @@ inline std::size_t hash_combine_64( std::size_t seed, T const& value )
  * @brief Combine a seed value (e.g., another hash) with the hash of a given type.
  */
 template <typename T>
-inline std::size_t hash_combine( std::size_t seed, T const& value )
+inline constexpr std::size_t hash_combine( std::size_t seed, T const& value )
 {
     // We use a run-time check for the size of size_t,
     // which however most likely is already resolved at compile time.
@@ -120,13 +122,23 @@ inline std::size_t hash_combine( std::size_t seed, T const& value )
     // Furthermore, shifting is added in order to spread bits around for greater diversity.
     // This whole approach follows the Boost hash combine functions.
 
-    if( sizeof( std::size_t ) == 4 ) {
-        return hash_combine_32( seed, value );
-    } else if( sizeof( std::size_t ) == 8 ) {
-        return hash_combine_64( seed, value );
-    } else {
-        throw std::runtime_error( "Invalid std::size_t size." );
-    }
+    static_assert(
+        ( sizeof( std::size_t ) == 4 ) || ( sizeof( std::size_t ) == 8 ),
+        "Need sizeof( std::size_t ) to be 4 or 8 (32bit or 64bit integer)"
+    );
+    return ( sizeof( std::size_t ) == 4 )
+        ? hash_combine_32( seed, value )
+        : hash_combine_64( seed, value )
+    ;
+
+    // constexpr in C++11 cannot have multiple return values
+    // if( sizeof( std::size_t ) == 4 ) {
+    //     return hash_combine_32( seed, value );
+    // } else if( sizeof( std::size_t ) == 8 ) {
+    //     return hash_combine_64( seed, value );
+    // } else {
+    //     throw std::runtime_error( "Invalid std::size_t size." );
+    // }
 }
 
 } // namespace utils

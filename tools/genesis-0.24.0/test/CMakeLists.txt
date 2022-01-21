@@ -1,5 +1,5 @@
 # Genesis - A toolkit for working with phylogenetic data.
-# Copyright (C) 2014-2020 Lucas Czech
+# Copyright (C) 2014-2021 Lucas Czech
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -15,9 +15,9 @@
 # along with this program.  If not, see <http://www.gnu.org/licenses/>.
 #
 # Contact:
-# Lucas Czech <lucas.czech@h-its.org>
-# Exelixis Lab, Heidelberg Institute for Theoretical Studies
-# Schloss-Wolfsbrunnenweg 35, D-69118 Heidelberg, Germany
+# Lucas Czech <lczech@carnegiescience.edu>
+# Department of Plant Biology, Carnegie Institution For Science
+# 260 Panama Street, Stanford, CA 94305, USA
 
 # ------------------------------------------------------------------------------
 #   Extra Warnings
@@ -93,6 +93,9 @@ if(NOT GTEST_FOUND)
     set(gtest_force_shared_crt ON CACHE BOOL "" FORCE)
 
     # Add googletest directly to our build. This defines the gtest and gtest_main targets.
+    # We only want test, not mock.
+    set(BUILD_GTEST ON  CACHE BOOL "Builds the googletest subproject")
+    set(BUILD_GMOCK OFF CACHE BOOL "Builds the googlemock subproject")
     add_subdirectory( ${CMAKE_BINARY_DIR}/googletest-src  ${CMAKE_BINARY_DIR}/googletest-build )
 
     # The gtest/gtest_main targets carry header search path dependencies automatically when using
@@ -109,8 +112,8 @@ if(NOT GTEST_FOUND)
     if(GTEST_NO_WARN_DEPRECATED_COPY)
         target_compile_options(gtest      PRIVATE "-Wno-deprecated-copy")
         target_compile_options(gtest_main PRIVATE "-Wno-deprecated-copy")
-        target_compile_options(gmock      PRIVATE "-Wno-deprecated-copy")
-        target_compile_options(gmock_main PRIVATE "-Wno-deprecated-copy")
+        # target_compile_options(gmock      PRIVATE "-Wno-deprecated-copy")
+        # target_compile_options(gmock_main PRIVATE "-Wno-deprecated-copy")
     endif()
 
     message (STATUS "Finished downloading GTest")
@@ -159,6 +162,9 @@ target_link_libraries (genesis_tests ${GTEST_BOTH_LIBRARIES})
 
 # Link against any external libraries, e.g. Pthreads.
 target_link_libraries (genesis_tests ${GENESIS_INTERNAL_LINK_LIBRARIES})
+IF(GENESIS_USE_HTSLIB AND NOT GENESIS_SYSTEM_HTSLIB)
+    add_dependencies( genesis_tests htslib )
+ENDIF()
 
 # Need to specify the whole path here. For some reason, cmake does not
 # extract it from the executable name here...
