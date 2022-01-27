@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 
 import argparse
+import collections
 import copy
 import json
 import os
@@ -1694,6 +1695,11 @@ def print_statistics(db_object, query):
         lower_fence, upper_fence = get_tukeys_fences(cat_float_values[cat])
         filtered_values = list(filter(lambda x: lower_fence <= x <= upper_fence, cat_float_values[cat]))
 
+        perc = 0.95
+        lp = 0
+        hp = perc
+        sorted_values = sorted(cat_float_values[cat])
+
         print(f"{cat}:\n"
               f"    min {min(cat_float_values[cat])} max {max(cat_float_values[cat])}\n"
               f"    mean {statistics.mean(cat_float_values[cat])} "
@@ -1704,7 +1710,11 @@ def print_statistics(db_object, query):
                   f"    lower/upper fence {(lower_fence, upper_fence)}\n"
                   f"    min {min(filtered_values)} max {max(filtered_values)}\n"
                   f"    mean {statistics.mean(filtered_values)} "
-                  f"median {statistics.median(filtered_values)}\n"
+                  f"median {statistics.median(filtered_values)}"
+                  )
+
+            print(f"  {perc}:\n"
+                  f"    low {sorted_values[int(len(sorted_values) * lp)]}  high {sorted_values[int(len(sorted_values) * hp) + 1]}\n"
                   )
 
     for cat in cat_str_values:
@@ -1833,29 +1843,29 @@ def main(args_list, is_imported=True):
             # Categories we currently filter outliers for
             categories = {  # TODO: make this work for AA (and all the other stuff)
                 "NUM_TAXA": 0,
-                #"OVERALL_NUM_ALIGNMENT_SITES": 0,
-                "TREE_DIAMETER": 0,
-                "BRANCH_LENGTH_VARIANCE": 0,
-                "RATE_AC": 0,
-                "RATE_AG": 0,
-                "RATE_AT": 0,
-                "RATE_CG": 0,
-                "RATE_CT": 0,
-                "RATE_GT": 0,
-                "FREQ_A": 0,
-                "FREQ_C": 0,
-                "FREQ_G": 0,
-                "FREQ_T": 0,
-                "ALPHA": 0,
-                "NUM_PATTERNS": 0,
-                "GAPS": 0
+                "OVERALL_NUM_ALIGNMENT_SITES": 0,
+                #"TREE_DIAMETER": 0,
+                #"BRANCH_LENGTH_VARIANCE": 0,
+                #"RATE_AC": 0,
+                #"RATE_AG": 0,
+                #"RATE_AT": 0,
+                #"RATE_CG": 0,
+                #"RATE_CT": 0,
+                #"RATE_GT": 0,
+                #"FREQ_A": 0,
+                #"FREQ_C": 0,
+                #"FREQ_G": 0,
+                #"FREQ_T": 0,
+                #"ALPHA": 0,
+                #"NUM_PATTERNS": 0,
+                #"GAPS": 0
                 # "TREE_LENGTH": 0     # TODO: check if available for all
             }
             all_tree_data = db_object.find(f"{BASE_SQL_FIND_COMMAND};")
             filter_list = []
             for cat in categories:
                 column_data = [entry[cat] for entry in all_tree_data]
-                categories[cat] = get_tukeys_fences(column_data)
+                categories[cat] = get_tukeys_fences(column_data, k=1.5)
 
                 filter_list.append(f"{cat} >= {categories[cat][0]} AND {cat} <= {categories[cat][1]}")
             if args.query:
