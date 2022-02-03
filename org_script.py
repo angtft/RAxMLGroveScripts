@@ -623,9 +623,16 @@ class RaxmlNGLogReader(object):
         """
         self.path = path
         self.partitions_dict = {}
-        self.__read()
-        self.__read_model(model_path)
-        self.__fill_general_info()
+        self.partition_names = []
+        try:
+            self.__read()
+            self.__read_model(model_path)
+            self.__fill_general_info()
+        except Exception as e:
+            print(f"Exception in raxml-ng: {self.path}\n{e}")
+            global global_exception_counter
+            global_exception_counter += 1
+            raise e
 
     def _read_fix(self):
         # TODO: implement
@@ -644,6 +651,7 @@ class RaxmlNGLogReader(object):
                 if line.startswith("Partition"):
                     if "name" in part_info_dict:
                         self.partitions_dict[part_info_dict["name"]].update(part_info_dict)
+                        self.partition_names.append(part_info_dict["name"])
                         part_info_dict = {}
 
                     part_info_dict["name"] = line.split()[-1]
@@ -657,8 +665,7 @@ class RaxmlNGLogReader(object):
                     part_info_dict["GAPS"] = float(line.split()[-2])
                 if line.startswith("Invariant sites:"):
                     part_info_dict["INVARIANT_SITES"] = float(line.split()[-2])
-                if line.startswith("Rate heterogeneity:") and "NONE" not in line:  # TODO: add the other params
-                    part_info_dict["ALPHA"] = float(line.split()[-7])
+            self.partition_names.append(part_info_dict["name"])
             self.partitions_dict[part_info_dict["name"]].update(part_info_dict)
 
     def __get_modifier(self, modifier_str):
@@ -701,15 +708,23 @@ class RaxmlNGLogReader(object):
 
         with open(path) as file:
             lines = file.readlines()
-            # assert len(lines) == len(self.partitions_dict)    # TODO: maybe do this check...
+            if len(lines) - 1 > len(self.partition_names):
+                raise ValueError(f"lines {len(lines)} > part_names {len(self.partition_names)}")
 
-            i = 0
-            for part_key in self.partitions_dict:
+            for i in range(len(lines)):
                 try:
-                    line = lines[i]
+                    line = lines[i].strip()
+                    if line:
+                        part_key = self.partition_names[i]
+                    else:
+                        continue
                 except Exception as e:
                     print(f"Exception in raxml-ng __read_model: {self.path}\n{e}")
+                    print(f"lines {len(lines)}  part_names {len(self.partition_names)}")
+                    global global_exception_counter
+                    global_exception_counter += 1
                     continue
+
                 modifiers_info = line.rstrip().split("+")
 
                 model = self.__get_modifier(modifiers_info[0])
@@ -737,8 +752,14 @@ class RaxmlNGLogReader(object):
 
                     for category in modifier_dict:
                         if modifier in modifier_dict[category]:
+                            values = re.findall(r"\{(.*?)\}", mi)
                             self.partitions_dict[part_key][category] = mi
-                i += 1
+                            if category == "AMONG_SITE_RATE_HETEROGENEITY_STR":
+                                alpha = values[0]
+                                self.partitions_dict[part_key]["ALPHA"] = float(alpha)
+                                if "/" in alpha:
+                                    print(self.path)
+                                    raise ValueError(alpha)
 
     def __fill_general_info(self):
         """
@@ -830,24 +851,32 @@ class OldRaxmlReader(object):
                             overall_num_sites = int(rside[0])
                 elif line.startswith("sites partition_"):
                     value = line.split("=")
-                    try:
-                        intervals = value[1].strip().split(",")
-                        part_size = 0
-                        for interval in intervals:
-                            temp_split = interval.split("\\")
-                            summands = temp_split[0].replace(" ", "").split("-")
-                            divisor = int(temp_split[1]) if len(temp_split) > 1 else 1
+                    if not "None" in value[1]:
+                        try:
+                            intervals = value[1].strip().split(",")
+                            part_size = 0
+                            for interval in intervals:
+                                temp_split = interval.split("\\")
+                                summands = temp_split[0].replace(" ", "").split("-")
+                                divisor = int(temp_split[1]) if len(temp_split) > 1 else 1
 
-                            s1 = int(summands[0])
-                            s2 = int(summands[1])
-                            part_size += int((s2 - s1 + 1) / divisor)
-                            if part_size <= 0:
-                                raise ValueError(f"Partition size <= 0: {part_size}")
-                        temp_part_dict["NUM_ALIGNMENT_SITES"].append(part_size)
-                    except Exception as e:
-                        print(f"Exception in old_raxml __read partition sites: {self.path}\n{e}")
-                        print(traceback.print_exc())
-                        temp_part_dict["NUM_ALIGNMENT_SITES"].append(None)
+                                s1 = int(summands[0])
+                                if len(summands) == 2:
+                                    s2 = int(summands[1])
+                                elif len(summands) == 1:
+                                    s2 = s1
+                                else:
+                                    raise ValueError(f"len(summands) = {len(summands)}")
+                                part_size += int((s2 - s1 + 1) / divisor)
+                                if part_size <= 0:
+                                    raise ValueError(f"Partition size <= 0: {part_size}")
+                            temp_part_dict["NUM_ALIGNMENT_SITES"].append(part_size)
+                        except Exception as e:
+                            print(f"Exception in old_raxml __read partition sites: {self.path}\n{e}")
+                            print(traceback.print_exc())
+                            global global_exception_counter
+                            global_exception_counter += 1
+                            temp_part_dict["NUM_ALIGNMENT_SITES"].append(None)
                 elif line.startswith("DataType:"):
                     value = get_value(line)
                     temp_part_dict["DATA_TYPE"].append(value)
@@ -895,6 +924,11 @@ class OldRaxmlReader(object):
                 temp_part_dict["BASE_FREQUENCIES"].append(copy.deepcopy(current_freqs))
 
             num_partitions = len(temp_part_dict["NUM_PATTERNS"])  # TODO: this should hopefully be representative
+
+            if not len(temp_part_dict["MODEL"]) == len(temp_part_dict["NUM_PATTERNS"]):
+                print(f"{len(temp_part_dict['MODEL'])} {len(temp_part_dict['NUM_PATTERNS'])}")
+                raise ValueError(f"len(models) len(patterns) mismatch in __read")
+
             alpha_idx = 0
             rate_idx = 0
             for i in range(num_partitions):
@@ -1239,7 +1273,7 @@ def get_tree_info(src_path, tree_id):
 
     except Exception as e:
         print("Exception in get_tree_info: {}".format(e))
-        return -1
+        raise e
     return ret_dct
 
 
@@ -1621,13 +1655,14 @@ def hopefully_somewhat_better_directory_crawl(root_path, db_object, add_new_file
             tree_info["MISSING_DATA_RATE"] = num_0 / (num_0 + num_1)
 
     except Exception as e:
-        print(f"Exception in directory crawl: {e}")
+        print(f"Exception in directory crawl at {root_path}:\n    {e}")
         print(traceback.print_exc())
         global_exception_counter += 1
         return
 
     if global_num_of_checked_jobs % 1000 == 0:
         print("________________________\n{}\n________________________".format(global_num_of_checked_jobs))
+        print(f"exceptions: {global_exception_counter}")
 
     global_tree_dict_list.append(tree_info)
     global_part_list_dict[tree_info["TREE_ID"]] = tree_dicts
