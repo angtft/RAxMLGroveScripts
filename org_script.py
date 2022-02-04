@@ -26,6 +26,7 @@ global_tree_dict_list = []
 global_part_list_dict = {}
 global_db_object = None
 global_use_gaps = False
+global_indel_rates = None
 
 global_node_counter = 0
 global_tree_name_dict = {}
@@ -81,6 +82,7 @@ BASE_SQL_FIND_COMMAND = "SELECT * FROM TREE t INNER JOIN PARTITION p ON t.TREE_I
 DEFAULT_DB_FILE_PATH = os.path.join(BASE_FILE_DIR, BASE_DB_FILE_NAME)
 DAWG_PATH = os.path.join(BASE_FILE_DIR, "tools", "dawg-1.2")
 SEQGEN_PATH = os.path.join(BASE_FILE_DIR, "tools", "Seq-Gen-1.3.4")
+ALISIM_PATH = os.path.join(BASE_FILE_DIR, "tools", "iqtree-2.2.0-beta-Linux")
 GENESIS_PATH = os.path.join(BASE_FILE_DIR, "tools", "genesis-0.24.0")
 
 
@@ -260,14 +262,12 @@ class Dawg(object):
         """
         self.seed_line = f"Seed = {seed}"
 
-    def execute(self, tree_path, out_path, tree_params, num_repeats=1, num_of_sequence=0):
+    def execute(self, tree_path, out_path, tree_params):
         """
         Executes Dawg to generate MSAs
         @param tree_path: tree file path
         @param out_path: output directory path
         @param tree_params: tree dict with tree information (such as model, substitution rates)
-        @param num_repeats: number of MSAs to generate (deprecated)
-        @param num_of_sequence: (deprecated)
         @return:
         """
         out_dir = os.path.dirname(os.path.abspath(out_path))
@@ -275,19 +275,11 @@ class Dawg(object):
 
         self.__configure(tree_path, tree_params)
         try:
-            if num_repeats > 1:
-                for i in range(0, num_repeats):
-                    call = [self.execute_path, self.config_path, "-o",
-                            # os.path.join(out_path, f"seq_{i}.{BASE_DAWG_SEQ_FILE_FORMAT}")]
-                            out_path]
-                    subprocess.check_output(call, cwd=BASE_FILE_DIR)
-            else:
-                call = [self.execute_path, self.config_path, "-o",
-                        # os.path.join(out_path, f"seq_{num_of_sequence}.{BASE_DAWG_SEQ_FILE_FORMAT}")]
-                        out_path]
-                subprocess.check_output(call, cwd=BASE_FILE_DIR)
+            call = [self.execute_path, self.config_path, "-o", out_path]
+            subprocess.check_output(call, cwd=BASE_FILE_DIR)
         except Exception as e:
             print(e)
+            print(traceback.print_exc())
             exit(0)
 
     def __compile(self):
@@ -342,16 +334,20 @@ class Dawg(object):
                 else:
                     out_lines.append(line)
             out_lines.append(f"\n{self.seed_line}\n")
-        if tree_params["GAPS"] != "None" and global_use_gaps:
+        if tree_params["GAPS"] != "None" and global_use_gaps and not global_indel_rates:
             """out_lines.append("GapModel = {'PL'}\n")
             out_lines.append("GapParams = {"
                              f"{tree_params['GAPS'] / 100}, 10"  # TODO: hardcoded value 10!
                              "}\n")"""
             out_lines.append("Lambda = {"
-                             f" {tree_params['GAPS'] / 100}"
-                             "} ")
+                             f"{tree_params['GAPS'] / 100}"
+                             "}\n")
         if tree_params["ALPHA"] != "None":
-            out_lines.append(f"Gamma = {tree_params['ALPHA']}")
+            out_lines.append(f"Gamma = {tree_params['ALPHA']}\n")
+        if global_indel_rates:
+            out_lines.append("Lambda = {"
+                             f"{global_indel_rates[0]}, {global_indel_rates[1]}"
+                             "}\n")
 
         with open(self.config_path, "w+") as config_file:
             config_file.write("".join(out_lines))
@@ -380,7 +376,7 @@ class SeqGen(object):
         """
         self.seed = seed
 
-    def execute(self, tree_path, out_path, tree_params, num_repeats=1, num_of_sequence=0):
+    def execute(self, tree_path, out_path, tree_params, num_of_sequence=0):
         """
         @deprecated
         Executes Seq-Gen to generate MSA files
@@ -431,6 +427,57 @@ class SeqGen(object):
         except Exception as e:
             print(e)
         print("Done!")
+
+
+class AliSim(object):
+    """
+    We use the AliSim here, which is now part of IQ-TREE2 (see https://github.com/iqtree/iqtree2/wiki/AliSim)
+    """
+
+    def __init__(self, path):
+        """
+        @param path: path to IQ-TREE2 root folder
+        """
+        self.path = path
+        self.seed_line = ""
+        self.execute_path = os.path.join(self.path, "bin", "iqtree2")
+
+    def set_seed(self, seed):
+        self.seed_line = f"{seed}"
+
+    def execute(self, tree_path, out_path, tree_params):
+        out_dir = os.path.dirname(os.path.abspath(out_path))
+        file_name = os.path.basename(out_path)
+
+        try:
+            if tree_params["MODEL"] != "GTR":
+                raise NotImplementedError("Only GTR model implemented for simulations right now :(")
+
+            seq_len = tree_params["NUM_ALIGNMENT_SITES"]
+            model_string = f'{tree_params["MODEL"]}' + "{" \
+                           f'{tree_params["RATE_AC"]}/{tree_params["RATE_AG"]}/{tree_params["RATE_CG"]}/{tree_params["RATE_CT"]}/{tree_params["RATE_GT"]}' + "}" \
+                           '+F{' + f'{tree_params["FREQ_A"]}/{tree_params["FREQ_C"]}/{tree_params["FREQ_G"]}/{tree_params["FREQ_T"]}' + '}'
+            if tree_params["ALPHA"]:
+                model_string += '+G{' + f'{tree_params["ALPHA"]}' + "}"
+
+            call = [
+                self.execute_path, "--alisim", out_path, "-m", model_string, "-t", tree_path,
+                "--length", f"{seq_len}", "-af", "fasta"
+            ]
+            if global_indel_rates:
+                call.extend([
+                    "--indel", f'{global_indel_rates[0]},{global_indel_rates[1]}'
+                ])
+            if self.seed_line:
+                call.extend([
+                    "--seed", self.seed_line
+                ])
+
+            subprocess.check_output(call, cwd=BASE_FILE_DIR)
+        except Exception as e:
+            print(e)
+            print(traceback.print_exc())
+            exit(0)
 
 
 class BetterTreeDataBase(object):
@@ -1103,7 +1150,9 @@ def init_args(arguments):
     parser.add_argument("--use-all-trees", action="store_true", help="Forces the usage of all found trees instead of "
                                                                      "pulling trees randomly from the set of found "
                                                                      "trees. (generate)")
-    parser.add_argument("-g", "--generator", choices=["dawg", "seq-gen"], default="dawg",
+    parser.add_argument("--indel", help="Comma separated insertion/deletion rates for the MSA generation. "
+                                        "(generate)")
+    parser.add_argument("-g", "--generator", choices=["dawg", "seq-gen", "alisim"], default="dawg",
                         help="Selects the sequence generator used. (generate)")
     parser.add_argument("-o", "--out-dir", default=BASE_OUT_DIR,
                         help=f"Output directory (default: {BASE_OUT_DIR}). (find, generate)")
@@ -1135,6 +1184,10 @@ def init_args(arguments):
     if args.use_gaps:
         global global_use_gaps
         global_use_gaps = True
+    if args.indel:
+        global global_indel_rates
+        indel_rates = args.indel.split(",")
+        global_indel_rates = (float(indel_rates[0]), float(indel_rates[1]))
 
     return args
 
@@ -1408,8 +1461,13 @@ def generate_sequences(results, args, meta_info_dict, forced_out_dir=""):
     if args.generator == "seq-gen":
         raise ValueError("seq-gen currently not working!")
         generator = SeqGen(SEQGEN_PATH)
-    else:
+        alignment_file_ext = f".{BASE_DAWG_SEQ_FILE_FORMAT}"
+    elif args.generator == "dawg":
         generator = Dawg(DAWG_PATH)
+        alignment_file_ext = f".{BASE_DAWG_SEQ_FILE_FORMAT}"
+    else:
+        generator = AliSim(ALISIM_PATH)
+        alignment_file_ext = f""
 
     if args.seed:
         generator.set_seed(args.seed)
@@ -1473,11 +1531,14 @@ def generate_sequences(results, args, meta_info_dict, forced_out_dir=""):
         # Generate per-partition MSAs
         for p_num in range(len(partitions)):
             seq_part_path = os.path.join(dl_tree_path,
-                                         f"seq_{i}.part{p_num}.{BASE_DAWG_SEQ_FILE_FORMAT}")  # TODO: do something with the formats...
+                                         f"seq_{i}.part{p_num}{alignment_file_ext}")  # TODO: do something with the formats...
 
             part = partitions[p_num]
             generator.execute(tree_path, seq_part_path, part)
-            seq_part_paths.append(seq_part_path)
+            if args.generator != "alisim":  # TODO: fix this please!
+                seq_part_paths.append(seq_part_path)
+            else:
+                seq_part_paths.append(f"{seq_part_path}.fa")
 
         # Assemble MSAs
         assemble_sequences(seq_part_paths, out_dir=dl_tree_path, matrix_path=pr_ab_matrix_path)
