@@ -3,10 +3,12 @@
 import argparse
 import collections
 import copy
+import itertools
 import json
 import os
 import random
 import re
+import shutil
 import sqlite3
 import statistics
 import subprocess
@@ -16,6 +18,7 @@ from io import StringIO
 from urllib.request import urlopen
 
 from Bio import Phylo, SeqIO, Seq, SeqRecord
+from skopt import Optimizer, space
 
 global_max_tree_file_len = 0
 
@@ -27,6 +30,9 @@ global_part_list_dict = {}
 global_db_object = None
 global_use_gaps = False
 global_indel_rates = None
+global_indel_distribution = None
+global_indel_distribution_params = None
+global_sequence_length = None
 
 global_node_counter = 0
 global_tree_name_dict = {}
@@ -78,12 +84,15 @@ BASE_STAT_OUT_FILE = os.path.join(BASE_FILE_DIR, "statistics.csv")
 BASE_SEQ_FILE_FORMAT = "Phylip"  # TODO: maybe think some more about formats (since Phylip only allows taxon names up to 10 characters, and SeqGen doesn't output other formats?)
 BASE_DAWG_SEQ_FILE_FORMAT = "Fasta"
 BASE_SQL_FIND_COMMAND = "SELECT * FROM TREE t INNER JOIN PARTITION p ON t.TREE_ID = p.PARENT_ID"
+BLANK_SYMBOL = "-"
 
 DEFAULT_DB_FILE_PATH = os.path.join(BASE_FILE_DIR, BASE_DB_FILE_NAME)
 DAWG_PATH = os.path.join(BASE_FILE_DIR, "tools", "dawg-1.2")
 SEQGEN_PATH = os.path.join(BASE_FILE_DIR, "tools", "Seq-Gen-1.3.4")
 ALISIM_PATH = os.path.join(BASE_FILE_DIR, "tools", "iqtree-2.2.0-beta-Linux")
 GENESIS_PATH = os.path.join(BASE_FILE_DIR, "tools", "genesis-0.24.0")
+RAXML_NG_PATH = os.path.join(BASE_FILE_DIR, "tools", "raxml-ng_v1.1.0_linux_x86_64", "raxml-ng")
+SIMULATION_TIMEOUT = 10    # after this number of seconds, the MSA simulating process will be cancelled
 
 
 def get_tukeys_fences(lst, k=1.5):
@@ -194,6 +203,89 @@ def create_dir_if_needed(path):
         pass
 
 
+def clear_directory(path):
+    for file_name in os.listdir(path):
+        os.remove(os.path.join(path, file_name))
+
+
+def test_optimizer_modes(mode, opt_params):
+    if mode == 0:
+        opt = Optimizer([
+            space.Integer(int(opt_params["seq_len"] * (1 - opt_params["range_factor"])),
+                          int(opt_params["seq_len"] * (1 + opt_params["range_factor"]))),
+            (0.0, 0.95),
+            (0.0, 0.95),
+            space.Integer(0, 2),  # ins distribution
+            (1, 10),  # ins 1st param
+            space.Integer(11, 50),  # ins 2nd param
+            space.Integer(0, 2),  # dels distribution
+            (1, 10),  # dels 1st param
+            space.Integer(11, 50)  # dels 2nd param
+        ])
+    elif mode == 1:
+        opt = Optimizer([
+            space.Integer(int(opt_params["seq_len"] * (1 - opt_params["range_factor"])),
+                          int(opt_params["seq_len"] * (1 + opt_params["range_factor"]))),
+            (0.0, 0.95),
+            (0.0, 0.95),
+            space.Integer(1, 10),  # ins 1st param
+            space.Integer(11, 40),  # ins 2nd param
+            space.Integer(1, 10),  # dels 1st param
+            space.Integer(11, 40)  # dels 2nd param
+        ])
+    elif mode == 2:
+        opt = Optimizer([
+            space.Integer(int(opt_params["seq_len"] * (1 - opt_params["range_factor"])),
+                          int(opt_params["seq_len"] * (1 + opt_params["range_factor"]))),
+            (0.0, 0.95),
+            (0.0, 0.95),
+            (1, 4),  # ins 1st param
+            space.Integer(1, 100),  # ins 2nd param
+            (1, 4),  # dels 1st param
+            space.Integer(1, 100)  # dels 2nd param
+        ])
+    else:
+        raise ValueError(f"unknown msa optimizer mode: {mode}")
+    return opt
+
+
+def test_use_optimizer_suggestion(mode, suggested_point):
+    def int_to_distribution(num):
+        if num == 0:
+            return "NB"
+        elif num == 1:
+            return "POW"
+        elif num == 2:
+            return "LAV"
+        else:
+            print("something went wrong!")
+            return "NB"
+
+    global global_sequence_length
+    global global_indel_rates
+    global global_indel_distribution
+    global global_indel_distribution_params
+
+    if mode == 0:
+        global_sequence_length = int(suggested_point[0])
+        global_indel_rates = (suggested_point[1], suggested_point[2])
+        global_indel_distribution = (int_to_distribution(suggested_point[3]), int_to_distribution(suggested_point[6]))
+        global_indel_distribution_params = ((suggested_point[4], suggested_point[5]),
+                                            (suggested_point[7], suggested_point[8]))
+    elif mode == 1:
+        global_sequence_length = int(suggested_point[0])
+        global_indel_rates = (suggested_point[1], suggested_point[2])
+        global_indel_distribution = ("NB", "NB")
+        global_indel_distribution_params = ((suggested_point[3], suggested_point[4]),
+                                            (suggested_point[5], suggested_point[6]))
+    elif mode == 2:
+        global_sequence_length = int(suggested_point[0])
+        global_indel_rates = (suggested_point[1], suggested_point[2])
+        global_indel_distribution = ("POW", "POW")
+        global_indel_distribution_params = ((suggested_point[3], suggested_point[4]),
+                                            (suggested_point[5], suggested_point[6]))
+
+
 def find_unused_tree_folder_name(root_dir_path, name):
     """
     This function finds the smallest number such that name + _number is an unused directory name in the specified
@@ -276,11 +368,15 @@ class Dawg(object):
         self.__configure(tree_path, tree_params)
         try:
             call = [self.execute_path, self.config_path, "-o", out_path]
-            subprocess.check_output(call, cwd=BASE_FILE_DIR)
+            subprocess.run(call, cwd=BASE_FILE_DIR, stdout=subprocess.DEVNULL, timeout=SIMULATION_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            print(f"Dawg.execute() timeout (after {SIMULATION_TIMEOUT}s)!")
+            return 1
         except Exception as e:
             print(e)
             print(traceback.print_exc())
-            exit(0)
+            return 1
+        return 0
 
     def __compile(self):
         """
@@ -312,7 +408,10 @@ class Dawg(object):
         @return:
         """
         tree_string = read_tree(tree_path)
-        seq_len = tree_params["NUM_ALIGNMENT_SITES"]
+        if not global_sequence_length:
+            seq_len = tree_params["NUM_ALIGNMENT_SITES"]
+        else:
+            seq_len = global_sequence_length
         out_lines = []
 
         with open(self.template_path) as example_file:
@@ -398,11 +497,11 @@ class SeqGen(object):
                 call.append(f"{self.seed}")
             if num_of_sequence == 0:
                 for i in range(0, num_repeats):
-                    out = subprocess.check_output(call, cwd=BASE_FILE_DIR, stderr=subprocess.DEVNULL)
+                    out = subprocess.run(call, cwd=BASE_FILE_DIR, stderr=subprocess.DEVNULL, timeout=SIMULATION_TIMEOUT)
                     with open(os.path.join(out_path_abs, f"seq_{i}.{BASE_SEQ_FILE_FORMAT}"), "w+") as file:
                         file.write(out.decode("UTF-8"))
             else:
-                out = subprocess.check_output(call, cwd=BASE_FILE_DIR, stderr=subprocess.DEVNULL)
+                out = subprocess.run(call, cwd=BASE_FILE_DIR, stderr=subprocess.DEVNULL, timeout=SIMULATION_TIMEOUT)
                 with open(os.path.join(out_path_abs, f"seq_{num_of_sequence}.{BASE_SEQ_FILE_FORMAT}"), "w+") as file:
                     file.write(out.decode("UTF-8"))
         except Exception as e:
@@ -461,23 +560,40 @@ class AliSim(object):
                 model_string += '+G{' + f'{tree_params["ALPHA"]}' + "}"
 
             call = [
-                self.execute_path, "--alisim", out_path, "-m", model_string, "-t", tree_path,
-                "--length", f"{seq_len}", "-af", "fasta"
+                self.execute_path,
+                "--alisim",
+                out_path,
+                "-m", model_string,
+                "-t", tree_path,
+                "--length", f"{seq_len}",
+                "-af", "fasta",
+                "--no-export-sequence-wo-gaps"
             ]
             if global_indel_rates:
                 call.extend([
                     "--indel", f'{global_indel_rates[0]},{global_indel_rates[1]}'
+                ])
+            if global_indel_distribution and global_indel_distribution_params:
+                call.extend([
+                    "--indel-size", f"{global_indel_distribution[0]}" + "{" +
+                                    f"{global_indel_distribution_params[0][0]}/{global_indel_distribution_params[0][1]}" + "}," +
+                                    f"{global_indel_distribution[1]}" + "{" +
+                                    f"{global_indel_distribution_params[1][0]}/{global_indel_distribution_params[1][1]}" + "}"
                 ])
             if self.seed_line:
                 call.extend([
                     "--seed", self.seed_line
                 ])
 
-            subprocess.check_output(call, cwd=BASE_FILE_DIR)
+            subprocess.run(call, cwd=BASE_FILE_DIR, stdout=subprocess.DEVNULL, timeout=SIMULATION_TIMEOUT)
+        except subprocess.TimeoutExpired:
+            print(f"AliSim.execute() timeout (after {SIMULATION_TIMEOUT}s)!")
+            return 1
         except Exception as e:
             print(e)
             print(traceback.print_exc())
-            exit(0)
+            return 1
+        return 0
 
 
 class BetterTreeDataBase(object):
@@ -1113,7 +1229,7 @@ def init_args(arguments):
                              "'add' adds trees from archive path to the db.\n"
                              "'execute' executes a command parametrized with '-c' on the db.\n"
                              "'find' tries to find trees in the db satisfying the conditions set with '-q'.\n"
-                             "'generate' generates sequences with Dawg using randomly drawn trees from the db.\n"
+                             "'generate' generates simulated MSAs using randomly drawn trees from the db.\n"
                              "'stats' prints some statistical information about the database entries.")
     parser.add_argument("-n", "--db-name", help=f"Sets the name of the database file. If not set, this tool will "
                                                 f"try to create/access the '{BASE_DB_FILE_NAME}' file.")
@@ -1152,12 +1268,19 @@ def init_args(arguments):
                                                                      "trees. (generate)")
     parser.add_argument("--indel", help="Comma separated insertion/deletion rates for the MSA generation. "
                                         "(generate)")
+    parser.add_argument("--match-gap-rate", action="store_true", help="Try to simulate the MSA with gap rate that "
+                                                                      "matches the gap rate of the original MSA of the "
+                                                                      "data set. This is done by simulating the MSA "
+                                                                      "with different indel rates until we successfully "
+                                                                      "simulate an MSA with a gap rate which is close "
+                                                                      "to the original (+/- 5%). (generate)")
     parser.add_argument("-g", "--generator", choices=["dawg", "seq-gen", "alisim"], default="dawg",
                         help="Selects the sequence generator used. (generate)")
     parser.add_argument("-o", "--out-dir", default=BASE_OUT_DIR,
                         help=f"Output directory (default: {BASE_OUT_DIR}). (find, generate)")
     parser.add_argument("--seed", help="Sets the seed for the random number generator of this script, "
                                        "as well as the sequence generators. (generate)")
+    parser.add_argument("--weights", help="DON'T USE IT! format: mw1,mw2,mw3,range_factor")
 
     args = parser.parse_args(arguments)
     if args.operation == "create" and not args.archive_path:
@@ -1184,10 +1307,12 @@ def init_args(arguments):
     if args.use_gaps:
         global global_use_gaps
         global_use_gaps = True
-    if args.indel:
+    if args.indel and not args.match_gap_rate:
         global global_indel_rates
         indel_rates = args.indel.split(",")
         global_indel_rates = (float(indel_rates[0]), float(indel_rates[1]))
+    elif args.indel and args.match_gap_rate:
+        parser.error("Mutually exclusive arguments --indel and --match-gap-rate arguments may not be used together!")
 
     return args
 
@@ -1397,6 +1522,20 @@ def group_partitions_in_result_dicts(results):
     return grouped_results
 
 
+def get_msa_gap_rate(msa_path):
+    records = SeqIO.parse(msa_path, BASE_DAWG_SEQ_FILE_FORMAT.lower())  # TODO: debug with other file formats than fasta
+    num_gaps = 0
+    seq_len = 0
+    num_taxa = 0
+    for record in records:
+        num_taxa += 1
+        seq = record.seq
+        if not seq_len:
+            seq_len = len(seq)
+        num_gaps += seq.count("_") + seq.count("-")
+    return num_gaps / (seq_len * num_taxa)
+
+
 def assemble_sequences(path_list, out_dir, matrix_path=""):
     """
     Concatenates multiple MSAs into a single file. We use this to create a big MSA file out of separately generated
@@ -1430,11 +1569,31 @@ def assemble_sequences(path_list, out_dir, matrix_path=""):
             if bit:
                 sequence += str(records_list[j][i].seq)
             else:
-                sequence += "_" * len(str(records_list[j][i].seq))
+                sequence += BLANK_SYMBOL * len(str(records_list[j][i].seq))
         new_rec = SeqRecord.SeqRecord(Seq.Seq(sequence), id=records_list[0][i].id, description="")
 
         with open(out_path, "a+") as file:
             SeqIO.write(new_rec, file, "fasta")
+
+    return out_path
+
+
+def blank_sequences_in_partition(part_seq_path, part_num, pr_ab_matrix_path):
+    if pr_ab_matrix_path:
+        _, _, pr_ab_matrix = read_pr_ab_matrix(pr_ab_matrix_path)
+        records = list(SeqIO.parse(part_seq_path, BASE_DAWG_SEQ_FILE_FORMAT.lower()))
+        new_records = []
+        for rec_num in range(len(records)):
+            record = records[rec_num]
+            if pr_ab_matrix[rec_num][part_num] == 1:
+                new_records.append(record)
+            else:
+                sequence = BLANK_SYMBOL * len(record.seq)
+                new_record = SeqRecord.SeqRecord(Seq.Seq(sequence), id=record.id, description="")
+                new_records.append(new_record)
+        with open(part_seq_path, "w+") as file:
+            for new_rec in new_records:
+                SeqIO.write(new_rec, file, BASE_DAWG_SEQ_FILE_FORMAT.lower())
 
 
 def generate_sequences(results, args, meta_info_dict, forced_out_dir=""):
@@ -1452,12 +1611,72 @@ def generate_sequences(results, args, meta_info_dict, forced_out_dir=""):
                               tree
              returned_paths: list of paths to the downloaded tree sets (which will also contain the generated sequences)
     """
+    weights = {
+        "mw1": 9,
+        "mw2": 4,
+        "mw3": 1,
+        "range_factor": 0.8,
+        "exp_mode": 1,
+        "num_runs": 100,
+    }
+    if args.weights and args.weights != "control":
+        temp_split_weights = args.weights.split(",")
+        weights = {
+            "mw1": float(temp_split_weights[0]),
+            "mw2": float(temp_split_weights[1]),
+            "mw3": float(temp_split_weights[2]),
+            "range_factor": float(temp_split_weights[3]),
+            "exp_mode": int(temp_split_weights[4]),
+            "num_runs": int(temp_split_weights[5]),
+        }
+    test_opt_results = collections.defaultdict(lambda: [])
+
+    def opt_metric(part_dict, sim_seq_len, sim_patterns, sim_gaps):
+        part_seq_len = part_dict["NUM_ALIGNMENT_SITES"]
+        part_patterns = part_dict["NUM_PATTERNS"]
+        part_gaps = part["GAPS"]
+        gap_den = max(part_gaps, sim_gaps)
+        if gap_den == 0:
+            gap_den = 1
+
+        return weights["mw1"] * abs(part_seq_len - sim_seq_len) / max(part_seq_len, sim_seq_len) + \
+               weights["mw2"] * abs(part_patterns - sim_patterns) / max(part_patterns, sim_patterns) + \
+               weights["mw3"] * abs(part_gaps - sim_gaps) / gap_den
+
+    def get_msa_params_from_raxml(msa_path):
+        raxml_path = RAXML_NG_PATH
+        msa_dir = os.path.dirname(msa_path)
+        command = [
+            raxml_path, "--parse",
+            "--msa", msa_path,
+            "--model", "GTR+G",
+            "--prefix", "parse",
+            "--redo"
+        ]
+        subprocess.check_output(command, cwd=msa_dir)
+        raxml_log_path = os.path.join(msa_dir, "parse.raxml.log")
+
+        sl = pn = gp = 0
+        with open(raxml_log_path) as file:
+            for line in file:
+                if line.startswith("Alignment sites / patterns:"):
+                    line = line.replace(" ", "").split(":")
+                    sl = int(line[1].split("/")[0])
+                    pn = int(line[1].split("/")[1])
+                elif line.startswith("Gaps:"):
+                    line = line.replace(" ", "").split(":")
+                    gp = float(line[1].split("%")[0])
+        return sl, pn, gp
+
+    global global_indel_rates
 
     returned_paths = []
+    returned_results = {}
 
     temp_tree_dir = os.path.join(os.path.abspath(args.out_dir))
     create_dir_if_needed(temp_tree_dir)
 
+    final_alignment_path = "{}"
     if args.generator == "seq-gen":
         raise ValueError("seq-gen currently not working!")
         generator = SeqGen(SEQGEN_PATH)
@@ -1468,6 +1687,7 @@ def generate_sequences(results, args, meta_info_dict, forced_out_dir=""):
     else:
         generator = AliSim(ALISIM_PATH)
         alignment_file_ext = f""
+        final_alignment_path = "{}.fa"
 
     if args.seed:
         generator.set_seed(args.seed)
@@ -1493,57 +1713,150 @@ def generate_sequences(results, args, meta_info_dict, forced_out_dir=""):
     key_list = list(grouped_results.keys())
     # TODO: think of ways to fix the following
     for i in range(int(args.num_msas)):
-        # Select tree to generate sequences for
-        if not args.use_all_trees:
-            rand_key = random.choice(key_list)
-        else:
-            rand_key = key_list[i % len(key_list)]
-        rand_tree_data = grouped_results[rand_key][0]
-        print(f"\nRun {i}. Selected tree:\n {rand_tree_data}")
-
-        # Set sequence length
-        if rand_tree_data["NUM_ALIGNMENT_SITES"] == "None":
-            rand_tree_data["NUM_ALIGNMENT_SITES"] = int(args.seq_len)
-        if args.set_seq_len:
-            rand_tree_data["NUM_ALIGNMENT_SITES"] = int(args.set_seq_len)
-
-        # Download tree
-        tree_folder_name = forced_out_dir
-        if not forced_out_dir:
-            tree_folder_name = find_unused_tree_folder_name(temp_tree_dir, rand_tree_data["TREE_ID"])
-            dl_tree_path = os.path.join(temp_tree_dir, tree_folder_name)
-        else:
-            dl_tree_path = os.path.join(temp_tree_dir, forced_out_dir)
-        returned_paths.extend(download_trees(temp_tree_dir, [rand_tree_data], meta_info_dict["COMMIT_HASH"],
-                                             grouped_results,
-                                             amount=1, forced_out_dir=tree_folder_name))
-        tree_path = os.path.join(dl_tree_path, BASE_TREE_NAME.format("best", BASE_TREE_FORMAT))
-
-        # Get presence/absence matrix path if needed
-        if args.insert_matrix_gaps:
-            pr_ab_matrix_path = os.path.join(dl_tree_path, "iqt.pr_ab_matrix")
-        else:
-            pr_ab_matrix_path = ""
-
-        seq_part_paths = []
-        partitions = grouped_results[rand_key]
-
-        # Generate per-partition MSAs
-        for p_num in range(len(partitions)):
-            seq_part_path = os.path.join(dl_tree_path,
-                                         f"seq_{i}.part{p_num}{alignment_file_ext}")  # TODO: do something with the formats...
-
-            part = partitions[p_num]
-            generator.execute(tree_path, seq_part_path, part)
-            if args.generator != "alisim":  # TODO: fix this please!
-                seq_part_paths.append(seq_part_path)
+        try:
+            # Select tree to generate sequences for
+            if not args.use_all_trees:
+                rand_key = random.choice(key_list)
             else:
-                seq_part_paths.append(f"{seq_part_path}.fa")
+                rand_key = key_list[i % len(key_list)]
+            rand_tree_data = grouped_results[rand_key][0]
+            print(f"\nRun {i}. Selected tree:\n {rand_tree_data}")
 
-        # Assemble MSAs
-        assemble_sequences(seq_part_paths, out_dir=dl_tree_path, matrix_path=pr_ab_matrix_path)
+            # Set sequence length
+            if rand_tree_data["NUM_ALIGNMENT_SITES"] == "None":
+                rand_tree_data["NUM_ALIGNMENT_SITES"] = int(args.seq_len)
+            if args.set_seq_len:
+                rand_tree_data["NUM_ALIGNMENT_SITES"] = int(args.set_seq_len)
 
-    return grouped_results, returned_paths
+            # Download tree
+            tree_folder_name = forced_out_dir
+            if not forced_out_dir:
+                tree_folder_name = find_unused_tree_folder_name(temp_tree_dir, rand_tree_data["TREE_ID"])
+                dl_tree_path = os.path.join(temp_tree_dir, tree_folder_name)
+            else:
+                dl_tree_path = os.path.join(temp_tree_dir, forced_out_dir)
+            returned_paths.extend(download_trees(temp_tree_dir, [rand_tree_data], meta_info_dict["COMMIT_HASH"],
+                                                 grouped_results,
+                                                 amount=1, forced_out_dir=tree_folder_name))
+            returned_results[rand_key] = grouped_results[rand_key]
+            tree_path = os.path.join(dl_tree_path, BASE_TREE_NAME.format("best", BASE_TREE_FORMAT))
+
+            # Get presence/absence matrix path if needed
+            if args.insert_matrix_gaps:
+                pr_ab_matrix_path = os.path.join(dl_tree_path, "iqt.pr_ab_matrix")
+                if not os.path.isfile(pr_ab_matrix_path):
+                    pr_ab_matrix_path = ""
+            else:
+                pr_ab_matrix_path = ""
+
+            seq_part_paths = []
+            partitions = grouped_results[rand_key]
+
+            # Generate per-partition MSAs
+            for p_num in range(len(partitions)):
+                seq_part_path = os.path.join(dl_tree_path,
+                                             f"seq_{i}.part{p_num}{alignment_file_ext}")  # TODO: do something with the formats...
+                formatted_seq_path = final_alignment_path.format(seq_part_path)
+
+                part = partitions[p_num]
+                generator.execute(tree_path, seq_part_path, part)
+                seq_part_paths.append(formatted_seq_path)
+
+                if args.weights and args.weights != "control":  # TODO: include the new argument
+                    seq_len = part["NUM_ALIGNMENT_SITES"]
+                    patterns = part["NUM_PATTERNS"]
+                    gaps = part["GAPS"]
+                    range_factor = weights["range_factor"]
+                    best_dist = 10000
+                    best_suggestion = None
+
+                    opt_params = {
+                        "seq_len": seq_len,
+                        "range_factor": range_factor
+                    }
+                    opt = test_optimizer_modes(weights["exp_mode"], opt_params)
+
+                    for opt_round in range(weights["num_runs"]):
+                        suggested_point = opt.ask()
+                        print(f"round {opt_round}: {suggested_point}")
+                        test_use_optimizer_suggestion(weights["exp_mode"], suggested_point)
+
+                        sim_failure = generator.execute(tree_path, seq_part_path, part)
+                        if sim_failure:
+                            opt.tell(suggested_point, 1000)
+                            continue
+
+                        if args.insert_matrix_gaps:
+                            blank_sequences_in_partition(formatted_seq_path, p_num, pr_ab_matrix_path)
+
+                        o_sl, o_pn, o_gp = get_msa_params_from_raxml(formatted_seq_path)
+                        dist = opt_metric(part, o_sl, o_pn, o_gp)
+                        opt.tell(suggested_point, dist)
+
+                        if dist < best_dist:
+                            print(f"new best: {dist}!")
+                            best_dist = dist
+                            best_suggestion = suggested_point
+                            shutil.copy(formatted_seq_path, formatted_seq_path + "_bg")
+
+                        if dist < 0.1:
+                            print("found dist below 0.1, stopping...")
+                            break
+
+                    shutil.copy(formatted_seq_path + "_bg", formatted_seq_path)
+                    print(f"overall best suggestion: {best_suggestion}, {best_dist}")
+
+                    o_sl, o_pn, o_gp = get_msa_params_from_raxml(formatted_seq_path)
+                    dist = opt_metric(part, o_sl, o_pn, o_gp)
+                    print(f"{seq_len}/{o_sl}\n"
+                          f"{patterns}/{o_pn}\n"
+                          f"{gaps}/{o_gp}")
+                    print(f"{dist}")
+
+                    gap_rate = get_msa_gap_rate(formatted_seq_path)
+                    print(f"sim_gaps: {gap_rate}\n")
+
+                    test_opt_results["o_sl"].append(o_sl)
+                    test_opt_results["o_pn"].append(o_pn)
+                    test_opt_results["o_gp"].append(o_gp)
+                    test_opt_results["dist"].append(dist)
+                    test_opt_results["seq_len"].append(seq_len)
+                    test_opt_results["patterns"].append(patterns)
+                    test_opt_results["gaps"].append(gaps)
+
+            # Assemble MSAs
+            assembled_msa_path = assemble_sequences(seq_part_paths, out_dir=dl_tree_path, matrix_path=pr_ab_matrix_path)
+
+            if args.weights:
+                o_sl, o_pn, o_gp = get_msa_params_from_raxml(assembled_msa_path)
+                dist = opt_metric(part, o_sl, o_pn, o_gp)
+                print(f"sites: {rand_tree_data['OVERALL_NUM_ALIGNMENT_SITES']}/{o_sl}\n"
+                      f"patterns: {rand_tree_data['OVERALL_NUM_PATTERNS']}/{o_pn}\n"
+                      f"gaps: {rand_tree_data['OVERALL_GAPS']}/{o_gp}")
+                print(f"dist: {dist}, normalized dist: {dist / (weights['mw1'] + weights['mw2'] + weights['mw3'])}")
+
+            if args.weights == "control":
+                test_opt_results["o_sl"].append(o_sl)
+                test_opt_results["o_pn"].append(o_pn)
+                test_opt_results["o_gp"].append(o_gp)
+                test_opt_results["dist"].append(dist)
+                test_opt_results["seq_len"].append(rand_tree_data['OVERALL_NUM_ALIGNMENT_SITES'])
+                test_opt_results["patterns"].append(rand_tree_data['OVERALL_NUM_PATTERNS'])
+                test_opt_results["gaps"].append(rand_tree_data['OVERALL_GAPS'])
+
+        except Exception as e:
+            print(e)
+            print(traceback.print_exc())
+            print("something went wrong!")
+
+            return {}, {}
+
+    if not args.weights:    # TODO: remember to remove this
+        return returned_results, returned_paths
+    elif args.weights == "control":
+        return returned_results, test_opt_results
+    else:
+        return returned_results, test_opt_results
 
 
 def get_archive_meta_data(archive_path):
