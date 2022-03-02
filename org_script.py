@@ -29,10 +29,6 @@ global_tree_dict_list = []
 global_part_list_dict = {}
 global_db_object = None
 global_use_gaps = False
-global_indel_rates = None
-global_indel_distribution = None
-global_indel_distribution_params = None
-global_sequence_length = None
 
 global_node_counter = 0
 global_tree_name_dict = {}
@@ -261,29 +257,31 @@ def test_use_optimizer_suggestion(mode, suggested_point):
             print("something went wrong!")
             return "NB"
 
-    global global_sequence_length
-    global global_indel_rates
-    global global_indel_distribution
-    global global_indel_distribution_params
+    new_seq_len = 0
+    indel_rates = ()
+    indel_distr = ()
+    indel_distr_params = ()
 
     if mode == 0:
-        global_sequence_length = int(suggested_point[0])
-        global_indel_rates = (suggested_point[1], suggested_point[2])
-        global_indel_distribution = (int_to_distribution(suggested_point[3]), int_to_distribution(suggested_point[6]))
-        global_indel_distribution_params = ((suggested_point[4], suggested_point[5]),
+        new_seq_len = int(suggested_point[0])
+        indel_rates = (suggested_point[1], suggested_point[2])
+        indel_distr = (int_to_distribution(suggested_point[3]), int_to_distribution(suggested_point[6]))
+        indel_distr_params = ((suggested_point[4], suggested_point[5]),
                                             (suggested_point[7], suggested_point[8]))
     elif mode == 1:
-        global_sequence_length = int(suggested_point[0])
-        global_indel_rates = (suggested_point[1], suggested_point[2])
-        global_indel_distribution = ("NB", "NB")
-        global_indel_distribution_params = ((suggested_point[3], suggested_point[4]),
+        new_seq_len = int(suggested_point[0])
+        indel_rates = (suggested_point[1], suggested_point[2])
+        indel_distr = ("NB", "NB")
+        indel_distr_params = ((suggested_point[3], suggested_point[4]),
                                             (suggested_point[5], suggested_point[6]))
     elif mode == 2:
-        global_sequence_length = int(suggested_point[0])
-        global_indel_rates = (suggested_point[1], suggested_point[2])
-        global_indel_distribution = ("POW", "POW")
-        global_indel_distribution_params = ((suggested_point[3], suggested_point[4]),
+        new_seq_len = int(suggested_point[0])
+        indel_rates = (suggested_point[1], suggested_point[2])
+        indel_distr = ("POW", "POW")
+        indel_distr_params = ((suggested_point[3], suggested_point[4]),
                                             (suggested_point[5], suggested_point[6]))
+
+    return new_seq_len, indel_rates, indel_distr, indel_distr_params
 
 
 def find_unused_tree_folder_name(root_dir_path, name):
@@ -354,7 +352,7 @@ class Dawg(object):
         """
         self.seed_line = f"Seed = {seed}"
 
-    def execute(self, tree_path, out_path, tree_params):
+    def execute(self, tree_path, out_path, tree_params, new_seq_len=0, indel_rates=(), indel_distr=(), indel_distr_params=()):
         """
         Executes Dawg to generate MSAs
         @param tree_path: tree file path
@@ -365,7 +363,7 @@ class Dawg(object):
         out_dir = os.path.dirname(os.path.abspath(out_path))
         self.config_path = os.path.join(out_dir, "template_modified.dawg")
 
-        self.__configure(tree_path, tree_params)
+        self.__configure(tree_path, tree_params, new_seq_len=new_seq_len, indel_rates=indel_rates)
         try:
             call = [self.execute_path, self.config_path, "-o", out_path]
             subprocess.run(call, cwd=BASE_FILE_DIR, stdout=subprocess.DEVNULL, timeout=SIMULATION_TIMEOUT)
@@ -399,7 +397,7 @@ class Dawg(object):
             print(e)
         print("Done!")
 
-    def __configure(self, tree_path, tree_params):
+    def __configure(self, tree_path, tree_params, new_seq_len=0, indel_rates=()):
         """
         Modifies a Dawg configuration file template with the information found in a tree dict and writes the modified
         version to config_path
@@ -408,10 +406,10 @@ class Dawg(object):
         @return:
         """
         tree_string = read_tree(tree_path)
-        if not global_sequence_length:
+        if not new_seq_len:
             seq_len = tree_params["NUM_ALIGNMENT_SITES"]
         else:
-            seq_len = global_sequence_length
+            seq_len = new_seq_len
         out_lines = []
 
         with open(self.template_path) as example_file:
@@ -433,7 +431,7 @@ class Dawg(object):
                 else:
                     out_lines.append(line)
             out_lines.append(f"\n{self.seed_line}\n")
-        if tree_params["GAPS"] != "None" and global_use_gaps and not global_indel_rates:
+        if tree_params["GAPS"] != "None" and global_use_gaps and not indel_rates:
             """out_lines.append("GapModel = {'PL'}\n")
             out_lines.append("GapParams = {"
                              f"{tree_params['GAPS'] / 100}, 10"  # TODO: hardcoded value 10!
@@ -443,9 +441,9 @@ class Dawg(object):
                              "}\n")
         if tree_params["ALPHA"] != "None":
             out_lines.append(f"Gamma = {tree_params['ALPHA']}\n")
-        if global_indel_rates:
+        if indel_rates:
             out_lines.append("Lambda = {"
-                             f"{global_indel_rates[0]}, {global_indel_rates[1]}"
+                             f"{indel_rates[0]}, {indel_rates[1]}"
                              "}\n")
 
         with open(self.config_path, "w+") as config_file:
@@ -544,7 +542,7 @@ class AliSim(object):
     def set_seed(self, seed):
         self.seed_line = f"{seed}"
 
-    def execute(self, tree_path, out_path, tree_params):
+    def execute(self, tree_path, out_path, tree_params, new_seq_len=0, indel_rates=(), indel_distr=(), indel_distr_params=()):
         out_dir = os.path.dirname(os.path.abspath(out_path))
         file_name = os.path.basename(out_path)
 
@@ -552,7 +550,11 @@ class AliSim(object):
             if tree_params["MODEL"] != "GTR":
                 raise NotImplementedError("Only GTR model implemented for simulations right now :(")
 
-            seq_len = tree_params["NUM_ALIGNMENT_SITES"]
+            if new_seq_len:
+                seq_len = new_seq_len
+            else:
+                seq_len = tree_params["NUM_ALIGNMENT_SITES"]
+
             model_string = f'{tree_params["MODEL"]}' + "{" \
                            f'{tree_params["RATE_AC"]}/{tree_params["RATE_AG"]}/{tree_params["RATE_CG"]}/{tree_params["RATE_CT"]}/{tree_params["RATE_GT"]}' + "}" \
                            '+F{' + f'{tree_params["FREQ_A"]}/{tree_params["FREQ_C"]}/{tree_params["FREQ_G"]}/{tree_params["FREQ_T"]}' + '}'
@@ -569,16 +571,16 @@ class AliSim(object):
                 "-af", "fasta",
                 "--no-export-sequence-wo-gaps"
             ]
-            if global_indel_rates:
+            if indel_rates:
                 call.extend([
-                    "--indel", f'{global_indel_rates[0]},{global_indel_rates[1]}'
+                    "--indel", f'{indel_rates[0]},{indel_rates[1]}'
                 ])
-            if global_indel_distribution and global_indel_distribution_params:
+            if indel_distr and indel_distr_params:
                 call.extend([
-                    "--indel-size", f"{global_indel_distribution[0]}" + "{" +
-                                    f"{global_indel_distribution_params[0][0]}/{global_indel_distribution_params[0][1]}" + "}," +
-                                    f"{global_indel_distribution[1]}" + "{" +
-                                    f"{global_indel_distribution_params[1][0]}/{global_indel_distribution_params[1][1]}" + "}"
+                    "--indel-size", f"{indel_distr[0]}" + "{" +
+                                    f"{indel_distr_params[0][0]}/{indel_distr_params[0][1]}" + "}," +
+                                    f"{indel_distr[1]}" + "{" +
+                                    f"{indel_distr_params[1][0]}/{indel_distr_params[1][1]}" + "}"
                 ])
             if self.seed_line:
                 call.extend([
@@ -1668,8 +1670,6 @@ def generate_sequences(results, args, meta_info_dict, forced_out_dir=""):
                     gp = float(line[1].split("%")[0])
         return sl, pn, gp
 
-    global global_indel_rates
-
     returned_paths = []
     returned_results = {}
 
@@ -1758,17 +1758,23 @@ def generate_sequences(results, args, meta_info_dict, forced_out_dir=""):
                                              f"seq_{i}.part{p_num}{alignment_file_ext}")  # TODO: do something with the formats...
                 formatted_seq_path = final_alignment_path.format(seq_part_path)
 
+                # generate a MSA in any case without weights in a "dry run", even if we reoptimize later
                 part = partitions[p_num]
                 generator.execute(tree_path, seq_part_path, part)
                 seq_part_paths.append(formatted_seq_path)
+
+                # save the dry run MSA (makes sure we don't end up with a worse distance after the "optimization")
+                o_sl, o_pn, o_gp = get_msa_params_from_raxml(formatted_seq_path)
+                dist = opt_metric(part, o_sl, o_pn, o_gp)
+                best_dist = dist
+                best_suggestion = None
+                shutil.copy(formatted_seq_path, formatted_seq_path + "_bg")
 
                 if args.weights and args.weights != "control":  # TODO: include the new argument
                     seq_len = part["NUM_ALIGNMENT_SITES"]
                     patterns = part["NUM_PATTERNS"]
                     gaps = part["GAPS"]
                     range_factor = weights["range_factor"]
-                    best_dist = 10000
-                    best_suggestion = None
 
                     opt_params = {
                         "seq_len": seq_len,
@@ -1779,9 +1785,15 @@ def generate_sequences(results, args, meta_info_dict, forced_out_dir=""):
                     for opt_round in range(weights["num_runs"]):
                         suggested_point = opt.ask()
                         print(f"round {opt_round}: {suggested_point}")
-                        test_use_optimizer_suggestion(weights["exp_mode"], suggested_point)
+                        new_seq_len, indel_rates, indel_distr, indel_distr_params = test_use_optimizer_suggestion(weights["exp_mode"], suggested_point)
 
-                        sim_failure = generator.execute(tree_path, seq_part_path, part)
+                        sim_failure = generator.execute(tree_path,
+                                                        seq_part_path,
+                                                        part,
+                                                        new_seq_len=new_seq_len,
+                                                        indel_rates=indel_rates,
+                                                        indel_distr=indel_distr,
+                                                        indel_distr_params=indel_distr_params)
                         if sim_failure:
                             opt.tell(suggested_point, 1000)
                             continue
@@ -1848,6 +1860,7 @@ def generate_sequences(results, args, meta_info_dict, forced_out_dir=""):
             print(e)
             print(traceback.print_exc())
             print("something went wrong!")
+            raise e
 
             return {}, {}
 
