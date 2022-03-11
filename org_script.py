@@ -1276,7 +1276,7 @@ def init_args(arguments):
                                                                       "with different indel rates until we successfully "
                                                                       "simulate an MSA with a gap rate which is close "
                                                                       "to the original (+/- 5%). (generate)")
-    parser.add_argument("-g", "--generator", choices=["dawg", "seq-gen", "alisim"], default="dawg",
+    parser.add_argument("-g", "--generator", choices=["dawg", "seq-gen", "alisim"], default="alisim",
                         help="Selects the sequence generator used. (generate)")
     parser.add_argument("-o", "--out-dir", default=BASE_OUT_DIR,
                         help=f"Output directory (default: {BASE_OUT_DIR}). (find, generate)")
@@ -1524,6 +1524,15 @@ def group_partitions_in_result_dicts(results):
     return grouped_results
 
 
+def filter_incomplete_groups(grouped_results):
+    filtered_grouped_results = {}
+    for id in grouped_results:
+        num_parts = grouped_results[id][0]["OVERALL_NUM_PARTITIONS"]
+        if len(grouped_results[id]) == num_parts:
+            filtered_grouped_results[id] = grouped_results[id]
+    return filtered_grouped_results
+
+
 def get_msa_gap_rate(msa_path):
     records = SeqIO.parse(msa_path, BASE_DAWG_SEQ_FILE_FORMAT.lower())  # TODO: debug with other file formats than fasta
     num_gaps = 0
@@ -1549,7 +1558,7 @@ def assemble_sequences(path_list, out_dir, matrix_path=""):
                         if not set: no missing data will be introduced
     @return:
     """
-    out_path = os.path.join(out_dir, f"assembled_sequences.fasta")  # f"assembled_{tree_id}.fasta"
+    out_path = os.path.join(out_dir, f"assembled_sequences.fasta")
     with open(out_path, "w+") as file:
         file.write("")
 
@@ -1580,6 +1589,25 @@ def assemble_sequences(path_list, out_dir, matrix_path=""):
     return out_path
 
 
+def fix_msa_for_iqt(msa_path):
+    records = SeqIO.parse(msa_path, BASE_DAWG_SEQ_FILE_FORMAT.lower())
+    new_records = []
+    rewrite = False
+
+    for record in records:
+        sequence = list(str(record.seq))
+        if sequence.count(BLANK_SYMBOL) == len(sequence):
+            sequence[0] = "A"
+            rewrite = True
+        new_rec = SeqRecord.SeqRecord(Seq.Seq("".join(sequence)), id=record.id, description="")
+        new_records.append(new_rec)
+
+    if rewrite:
+        with open(msa_path, "w+") as file:
+            for new_rec in new_records:
+                SeqIO.write(new_rec, file, "fasta")
+
+
 def blank_sequences_in_partition(part_seq_path, part_num, pr_ab_matrix_path):
     if pr_ab_matrix_path:
         _, _, pr_ab_matrix = read_pr_ab_matrix(pr_ab_matrix_path)
@@ -1598,13 +1626,13 @@ def blank_sequences_in_partition(part_seq_path, part_num, pr_ab_matrix_path):
                 SeqIO.write(new_rec, file, BASE_DAWG_SEQ_FILE_FORMAT.lower())
 
 
-def generate_sequences(results, args, meta_info_dict, forced_out_dir=""):
+def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir=""):
     """
     Generates sequences based on the result dict, using Dawg or Seq-Gen.
     If args.seed is set, it will be used for the generators.
     If args.insert_matrix_gaps is set, the script will first generate MSAs for every partition, then assemble
         them into a single MSA file
-    @param results: dict returned by db.find()
+    @param grouped_results: dict mapping tree id to list of tree partition dicts
     @param args: arguments object
     @param meta_info_dict: dict containing meta info, such as the commit hash of the current db
     @param forced_out_dir: if set, the used output directory will carry that name,
@@ -1641,9 +1669,12 @@ def generate_sequences(results, args, meta_info_dict, forced_out_dir=""):
         if gap_den == 0:
             gap_den = 1
 
-        return weights["mw1"] * abs(part_seq_len - sim_seq_len) / max(part_seq_len, sim_seq_len) + \
+        temp_dist = weights["mw1"] * abs(part_seq_len - sim_seq_len) / max(part_seq_len, sim_seq_len) + \
                weights["mw2"] * abs(part_patterns - sim_patterns) / max(part_patterns, sim_patterns) + \
                weights["mw3"] * abs(part_gaps - sim_gaps) / gap_den
+        norm_dist = temp_dist / (weights["mw1"] + weights["mw2"] + weights["mw3"])
+
+        return norm_dist
 
     def get_msa_params_from_raxml(msa_path):
         raxml_path = RAXML_NG_PATH
@@ -1694,8 +1725,6 @@ def generate_sequences(results, args, meta_info_dict, forced_out_dir=""):
         print(f"Seed: {args.seed}")
 
     print(f"Using {args.generator}.")
-
-    grouped_results = group_partitions_in_result_dicts(results)
 
     for key in list(grouped_results.keys()):
         # Currently we only support DNA with GTR model, and since our query would filter other partitions
@@ -1838,6 +1867,10 @@ def generate_sequences(results, args, meta_info_dict, forced_out_dir=""):
 
             # Assemble MSAs
             assembled_msa_path = assemble_sequences(seq_part_paths, out_dir=dl_tree_path, matrix_path=pr_ab_matrix_path)
+
+            # TODO: Temporary(?) "fix" of MSAs which contain fully empty sequences for later IQTree2 analysis
+            #       because that thing throws errors otherwise
+            fix_msa_for_iqt(assembled_msa_path)
 
             if args.weights:
                 o_sl, o_pn, o_gp = get_msa_params_from_raxml(assembled_msa_path)
@@ -2055,15 +2088,6 @@ def hopefully_somewhat_better_directory_crawl(root_path, db_object, add_new_file
     global_part_list_dict[tree_info["TREE_ID"]] = tree_dicts
 
 
-def count_result_trees(results):
-    """
-    Counts the number of unique tree ids in the result dict
-    @param results: result dict (as returned by a db_object)
-    @return: number of unique tree ids
-    """
-    return len(set([r["TREE_ID"] for r in results]))
-
-
 def print_statistics(db_object, query):
     """
     Prints statistical information about the entries of the columns in the db (stats operation). If -q is used,
@@ -2212,7 +2236,9 @@ def main(args_list, is_imported=True):
         result = db_object.find(
             f"SELECT * FROM TREE t INNER JOIN PARTITION p ON t.TREE_ID = p.PARENT_ID WHERE {args.query};")
         grouped_result = group_partitions_in_result_dicts(result)
-        num_results = count_result_trees(result)
+        grouped_result = filter_incomplete_groups(grouped_result)
+
+        num_results = len(list(grouped_result.keys()))
 
         printed_results = 0
         printed_dcts = {}
@@ -2297,13 +2323,16 @@ def main(args_list, is_imported=True):
             results = db_object.find(
                 f"{BASE_SQL_FIND_COMMAND} WHERE MODEL LIKE 'GTR%' AND RATE_AC AND FREQ_A AND OVERALL_NUM_ALIGNMENT_SITES > 0 AND {query};")
 
-        print("Found {} trees".format(count_result_trees(results)))
+        grouped_results = group_partitions_in_result_dicts(results)
+        grouped_results = filter_incomplete_groups(grouped_results)
+
+        print("Found {} trees".format(len(list(grouped_results.keys()))))
 
         if len(results) > 0:
             if args.operation == "generate":
-                returned_results, returned_paths = generate_sequences(results, args, meta_info_dict)
+                returned_results, returned_paths = generate_sequences(grouped_results, args, meta_info_dict)
             else:
-                returned_results, returned_paths = generate_sequences(results, args, meta_info_dict,
+                returned_results, returned_paths = generate_sequences(grouped_results, args, meta_info_dict,
                                                                       forced_out_dir="default")
     elif args.operation == "stats":
         print_statistics(db_object, args.query if args.query else "1")
