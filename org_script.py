@@ -88,7 +88,8 @@ SEQGEN_PATH = os.path.join(BASE_FILE_DIR, "tools", "Seq-Gen-1.3.4")
 ALISIM_PATH = os.path.join(BASE_FILE_DIR, "tools", "iqtree-2.2.0-beta-Linux")
 GENESIS_PATH = os.path.join(BASE_FILE_DIR, "tools", "genesis-0.24.0")
 RAXML_NG_PATH = os.path.join(BASE_FILE_DIR, "tools", "raxml-ng_v1.1.0_linux_x86_64", "raxml-ng")
-SIMULATION_TIMEOUT = 10    # after this number of seconds, the MSA simulating process will be cancelled
+SIMULATION_TIMEOUT = 60    # after this number of seconds, the MSA simulating process will be cancelled
+SIMULATION_OPT_STOP_THRESH = 0.01
 
 
 def get_tukeys_fences(lst, k=1.5):
@@ -1354,6 +1355,19 @@ def save_tree_dict(path, result):
         print(traceback.print_exc())
 
 
+def write_partitions_file(dir_path, partition_results):
+    sorted_parts = copy.deepcopy(partition_results)
+    sorted_parts.sort(key=lambda x: int(x["PARTITION_NUM"]))
+    file_path = os.path.join(dir_path, "partitions.txt")
+    with open(file_path, "w+") as file:
+        current_site_num = 1
+        for part in sorted_parts:
+            line = f"{part['DATA_TYPE']}, partition_{part['PARTITION_NUM']} = " \
+                   f"{current_site_num}-{current_site_num + int(part['NUM_ALIGNMENT_SITES']) - 1}\n"
+            current_site_num += int(part["NUM_ALIGNMENT_SITES"])
+            file.write(line)
+
+
 def download_trees(dest_path, result, commit_hash, grouped_result, amount=0, forced_out_dir=""):
     """
     Downloades a data set from GitHub, also can save the tree dict (result) in the destination directory
@@ -1382,6 +1396,9 @@ def download_trees(dest_path, result, commit_hash, grouped_result, amount=0, for
             create_dir_if_needed(dir_path)
             if grouped_result:
                 save_tree_dict(dir_path, grouped_result[tree_id])
+
+                if len(grouped_result[tree_id]) > 1:
+                    write_partitions_file(dir_path, grouped_result[tree_id])
 
             for file_name in possible_files:
                 try:
@@ -1840,8 +1857,8 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
                             best_suggestion = suggested_point
                             shutil.copy(formatted_seq_path, formatted_seq_path + "_bg")
 
-                        if dist < 0.1:
-                            print("found dist below 0.1, stopping...")
+                        if dist < SIMULATION_OPT_STOP_THRESH:
+                            print(f"found dist below {SIMULATION_OPT_STOP_THRESH}, stopping...")
                             break
 
                     shutil.copy(formatted_seq_path + "_bg", formatted_seq_path)
@@ -2098,6 +2115,7 @@ def print_statistics(db_object, query):
 
     results = db_object.find(f"SELECT * FROM TREE t INNER JOIN PARTITION p ON t.TREE_ID = p.PARENT_ID WHERE {query};")
     grouped_results = group_partitions_in_result_dicts(results)
+    grouped_results = filter_incomplete_groups(grouped_results)
 
     cat_float_values = {}
     cat_str_values = {}
