@@ -1355,10 +1355,13 @@ def save_tree_dict(path, result):
         print(traceback.print_exc())
 
 
-def write_partitions_file(dir_path, partition_results):
+def write_partitions_file(dir_path, partition_results, file_name=""):
     sorted_parts = copy.deepcopy(partition_results)
     sorted_parts.sort(key=lambda x: int(x["PARTITION_NUM"]))
-    file_path = os.path.join(dir_path, "partitions.txt")
+    if not file_name:
+        file_path = os.path.join(dir_path, "partitions.txt")
+    else:
+        file_path = os.path.join(dir_path, file_name)
     with open(file_path, "w+") as file:
         current_site_num = 1
         for part in sorted_parts:
@@ -1564,7 +1567,8 @@ def get_msa_gap_rate(msa_path):
     return num_gaps / (seq_len * num_taxa)
 
 
-def assemble_sequences(path_list, out_dir, matrix_path=""):
+def assemble_sequences(path_list, out_dir, matrix_path="", in_format=BASE_DAWG_SEQ_FILE_FORMAT.lower(),
+                       out_format="fasta"):
     """
     Concatenates multiple MSAs into a single file. We use this to create a big MSA file out of separately generated
     per-partition-MSAs.
@@ -1573,6 +1577,8 @@ def assemble_sequences(path_list, out_dir, matrix_path=""):
     @param matrix_path: path to the presence/absence matrix to use
                         if set: sequence i in partition p will be filled with blank symbols if matrix[i, p] == 0
                         if not set: no missing data will be introduced
+    @param in_format: format of the sequence files to be assembled
+    @param out_format: format of the MSA file
     @return:
     """
     out_path = os.path.join(out_dir, f"assembled_sequences.fasta")
@@ -1586,7 +1592,7 @@ def assemble_sequences(path_list, out_dir, matrix_path=""):
         matrix = []
 
     for path in path_list:
-        records = SeqIO.parse(path, BASE_DAWG_SEQ_FILE_FORMAT.lower())
+        records = SeqIO.parse(path, in_format)
         records_list.append(list(records))
 
     for i in range(len(records_list[0])):
@@ -1601,7 +1607,7 @@ def assemble_sequences(path_list, out_dir, matrix_path=""):
         new_rec = SeqRecord.SeqRecord(Seq.Seq(sequence), id=records_list[0][i].id, description="")
 
         with open(out_path, "a+") as file:
-            SeqIO.write(new_rec, file, "fasta")
+            SeqIO.write(new_rec, file, out_format)
 
     return out_path
 
@@ -1678,44 +1684,53 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
         }
     test_opt_results = collections.defaultdict(lambda: [])
 
-    def opt_metric(part_dict, sim_seq_len, sim_patterns, sim_gaps):
-        part_seq_len = part_dict["NUM_ALIGNMENT_SITES"]
-        part_patterns = part_dict["NUM_PATTERNS"]
-        part_gaps = part["GAPS"]
+    def opt_metric2(part_seq_len, part_patterns, part_gaps, sim_seq_len, sim_patterns, sim_gaps):
         gap_den = max(part_gaps, sim_gaps)
         if gap_den == 0:
             gap_den = 1
 
         temp_dist = weights["mw1"] * abs(part_seq_len - sim_seq_len) / max(part_seq_len, sim_seq_len) + \
-               weights["mw2"] * abs(part_patterns - sim_patterns) / max(part_patterns, sim_patterns) + \
-               weights["mw3"] * abs(part_gaps - sim_gaps) / gap_den
+                    weights["mw2"] * abs(part_patterns - sim_patterns) / max(part_patterns, sim_patterns) + \
+                    weights["mw3"] * abs(part_gaps - sim_gaps) / gap_den
         norm_dist = temp_dist / (weights["mw1"] + weights["mw2"] + weights["mw3"])
 
         return norm_dist
 
+    def opt_metric(part_dict, sim_seq_len, sim_patterns, sim_gaps):
+        part_seq_len = part_dict["NUM_ALIGNMENT_SITES"]
+        part_patterns = part_dict["NUM_PATTERNS"]
+        part_gaps = part["GAPS"]
+
+        return opt_metric2(part_seq_len, part_patterns, part_gaps, sim_seq_len, sim_patterns, sim_gaps)
+
     def get_msa_params_from_raxml(msa_path):
         raxml_path = RAXML_NG_PATH
         msa_dir = os.path.dirname(msa_path)
+        prefix = "parse"
+
         command = [
             raxml_path, "--parse",
             "--msa", msa_path,
             "--model", "GTR+G",
-            "--prefix", "parse",
+            "--prefix", prefix,
             "--redo"
         ]
         subprocess.check_output(command, cwd=msa_dir)
-        raxml_log_path = os.path.join(msa_dir, "parse.raxml.log")
+        raxml_log_path = os.path.join(msa_dir, f"{prefix}.raxml.log")
 
         sl = pn = gp = 0
         with open(raxml_log_path) as file:
             for line in file:
                 if line.startswith("Alignment sites / patterns:"):
                     line = line.replace(" ", "").split(":")
-                    sl = int(line[1].split("/")[0])
+                    # sl = int(line[1].split("/")[0])
                     pn = int(line[1].split("/")[1])
                 elif line.startswith("Gaps:"):
                     line = line.replace(" ", "").split(":")
                     gp = float(line[1].split("%")[0])
+                elif "Loaded alignment with" in line:
+                    tres = re.findall("taxa and (.*?) sites", line)
+                    sl = int(tres[0])
         return sl, pn, gp
 
     returned_paths = []
@@ -1795,19 +1810,19 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
             else:
                 pr_ab_matrix_path = ""
 
-            seq_part_paths = []
+            seq_part_path_tuples = []
             partitions = grouped_results[rand_key]
+            part_length_dict = {}
 
             # Generate per-partition MSAs
-            for p_num in range(len(partitions)):
+            for part in partitions:
                 seq_part_path = os.path.join(dl_tree_path,
-                                             f"seq_{i}.part{p_num}{alignment_file_ext}")  # TODO: do something with the formats...
+                                             f"seq_{i}.part{part['PARTITION_NUM']}{alignment_file_ext}")  # TODO: do something with the formats...
                 formatted_seq_path = final_alignment_path.format(seq_part_path)
 
                 # generate a MSA in any case without weights in a "dry run", even if we reoptimize later
-                part = partitions[p_num]
                 generator.execute(tree_path, seq_part_path, part)
-                seq_part_paths.append(formatted_seq_path)
+                seq_part_path_tuples.append((formatted_seq_path, part["PARTITION_NUM"]))
 
                 # save the dry run MSA (makes sure we don't end up with a worse distance after the "optimization")
                 o_sl, o_pn, o_gp = get_msa_params_from_raxml(formatted_seq_path)
@@ -1845,7 +1860,7 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
                             continue
 
                         if args.insert_matrix_gaps:
-                            blank_sequences_in_partition(formatted_seq_path, p_num, pr_ab_matrix_path)
+                            blank_sequences_in_partition(formatted_seq_path, part['PARTITION_NUM'], pr_ab_matrix_path)
 
                         o_sl, o_pn, o_gp = get_msa_params_from_raxml(formatted_seq_path)
                         dist = opt_metric(part, o_sl, o_pn, o_gp)
@@ -1871,9 +1886,6 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
                           f"{gaps}/{o_gp}")
                     print(f"{dist}")
 
-                    gap_rate = get_msa_gap_rate(formatted_seq_path)
-                    print(f"sim_gaps: {gap_rate}\n")
-
                     test_opt_results["o_sl"].append(o_sl)
                     test_opt_results["o_pn"].append(o_pn)
                     test_opt_results["o_gp"].append(o_gp)
@@ -1882,8 +1894,20 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
                     test_opt_results["patterns"].append(patterns)
                     test_opt_results["gaps"].append(gaps)
 
+                part_length_dict[part["PARTITION_NUM"]] = o_sl
+
             # Assemble MSAs
-            assembled_msa_path = assemble_sequences(seq_part_paths, out_dir=dl_tree_path, matrix_path=pr_ab_matrix_path)
+            seq_part_path_tuples.sort(key=lambda x: x[1])
+            sorted_seq_paths = [x[0] for x in seq_part_path_tuples]
+            assembled_msa_path = assemble_sequences(sorted_seq_paths, out_dir=dl_tree_path, matrix_path=pr_ab_matrix_path)
+
+            # Rewrite partitions file according to simulated MSA
+            sim_parts = copy.deepcopy(partitions)
+            for key in part_length_dict:
+                for temp_part in sim_parts:
+                    if key == temp_part["PARTITION_NUM"]:
+                        temp_part["NUM_ALIGNMENT_SITES"] = part_length_dict[key]
+            write_partitions_file(os.path.dirname(assembled_msa_path), sim_parts, "sim_partitions.txt")
 
             # TODO: Temporary(?) "fix" of MSAs which contain fully empty sequences for later IQTree2 analysis
             #       because that thing throws errors otherwise
@@ -1891,11 +1915,14 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
 
             if args.weights:
                 o_sl, o_pn, o_gp = get_msa_params_from_raxml(assembled_msa_path)
-                dist = opt_metric(part, o_sl, o_pn, o_gp)
+                dist = opt_metric2(rand_tree_data['OVERALL_NUM_ALIGNMENT_SITES'],
+                                   rand_tree_data['OVERALL_NUM_PATTERNS'],
+                                   rand_tree_data['OVERALL_GAPS'],
+                                   o_sl, o_pn, o_gp)
                 print(f"sites: {rand_tree_data['OVERALL_NUM_ALIGNMENT_SITES']}/{o_sl}\n"
                       f"patterns: {rand_tree_data['OVERALL_NUM_PATTERNS']}/{o_pn}\n"
                       f"gaps: {rand_tree_data['OVERALL_GAPS']}/{o_gp}")
-                print(f"dist: {dist}, normalized dist: {dist / (weights['mw1'] + weights['mw2'] + weights['mw3'])}")
+                print(f"dist: {dist}")
 
             if args.weights == "control":
                 test_opt_results["o_sl"].append(o_sl)
