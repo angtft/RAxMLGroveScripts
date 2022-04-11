@@ -1356,6 +1356,9 @@ def save_tree_dict(path, result):
 
 
 def write_partitions_file(dir_path, partition_results, file_name=""):
+    if partition_results[0]["OVERALL_NUM_PARTITIONS"] == 1:
+        return
+
     sorted_parts = copy.deepcopy(partition_results)
     sorted_parts.sort(key=lambda x: int(x["PARTITION_NUM"]))
     if not file_name:
@@ -1816,13 +1819,18 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
 
             # Generate per-partition MSAs
             for part in partitions:
+                if part['PARTITION_NUM']:
+                    current_part_num = part['PARTITION_NUM']
+                else:
+                    current_part_num = 0
+
                 seq_part_path = os.path.join(dl_tree_path,
-                                             f"seq_{i}.part{part['PARTITION_NUM']}{alignment_file_ext}")  # TODO: do something with the formats...
+                                             f"seq_{i}.part{current_part_num}{alignment_file_ext}")  # TODO: do something with the formats...
                 formatted_seq_path = final_alignment_path.format(seq_part_path)
 
                 # generate a MSA in any case without weights in a "dry run", even if we reoptimize later
                 generator.execute(tree_path, seq_part_path, part)
-                seq_part_path_tuples.append((formatted_seq_path, part["PARTITION_NUM"]))
+                seq_part_path_tuples.append((formatted_seq_path, current_part_num))
 
                 # save the dry run MSA (makes sure we don't end up with a worse distance after the "optimization")
                 o_sl, o_pn, o_gp = get_msa_params_from_raxml(formatted_seq_path)
