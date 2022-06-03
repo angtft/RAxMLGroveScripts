@@ -28,7 +28,6 @@ global_num_of_checked_jobs = 0
 global_tree_dict_list = []
 global_part_list_dict = {}
 global_db_object = None
-global_use_gaps = False
 
 global_node_counter = 0
 global_tree_name_dict = {}
@@ -432,7 +431,7 @@ class Dawg(object):
                 else:
                     out_lines.append(line)
             out_lines.append(f"\n{self.seed_line}\n")
-        if tree_params["GAPS"] != "None" and global_use_gaps and not indel_rates:
+        if tree_params["GAPS"] != "None" and not indel_rates and False:   # TODO: deprecated!
             """out_lines.append("GapModel = {'PL'}\n")
             out_lines.append("GapParams = {"
                              f"{tree_params['GAPS'] / 100}, 10"  # TODO: hardcoded value 10!
@@ -1245,7 +1244,8 @@ def init_args(arguments):
                                               "don't break your own database...")
     parser.add_argument("--list", action='store_true', help="Lists all found trees, "
                                                             "without asking for download. (find)")
-    parser.add_argument("--num-msas", default=1, help="Number of MSAs to be generated. To generate "
+    parser.add_argument("--num-msas", default=1, help="CURRENTLY NOT WORKING! "  # TODO: make this work again!
+                                                      "Number of MSAs to be generated. To generate "
                                                       "a MSA we randomly draw a tree from the db (can be "
                                                       "used with -q) and run a sequence generator with that tree. "
                                                       "(generate)")
@@ -1263,20 +1263,15 @@ def init_args(arguments):
     parser.add_argument("--insert-matrix-gaps", action="store_true", help="Uses the presence/absence matrices to "
                                                                           "insert gaps into the simulated sequences. "
                                                                           "(generate)")
-    parser.add_argument("--use-gaps", action="store_true", help="EXPERIMENTAL! Tries to use the gap percentage found "
-                                                                "in tree parameters to simulate gaps in the MSA. "
-                                                                "(generate)")
     parser.add_argument("--use-all-trees", action="store_true", help="Forces the usage of all found trees instead of "
                                                                      "pulling trees randomly from the set of found "
                                                                      "trees. (generate)")
-    parser.add_argument("--indel", help="Comma separated insertion/deletion rates for the MSA generation. "
+    parser.add_argument("--indel", help="CURRENTLY NOT WORKING! Comma separated insertion/deletion rates for the MSA generation. "  # TODO: make this work
                                         "(generate)")
-    parser.add_argument("--match-gap-rate", action="store_true", help="Try to simulate the MSA with gap rate that "
-                                                                      "matches the gap rate of the original MSA of the "
-                                                                      "data set. This is done by simulating the MSA "
-                                                                      "with different indel rates until we successfully "
-                                                                      "simulate an MSA with a gap rate which is close "
-                                                                      "to the original (+/- 5%). (generate)")
+    parser.add_argument("--match-patterns", action="store_true",
+                        help="Use an optimizer to experiment with different gap indel rates during the MSA simulation "
+                             "to get the sequence length, number of patterns and gap proportions of the simulated "
+                             "MSA as close as possible to the values in the according RG database entry. (generate)")
     parser.add_argument("-g", "--generator", choices=["dawg", "seq-gen", "alisim"], default="alisim",
                         help="Selects the sequence generator used. (generate)")
     parser.add_argument("-o", "--out-dir", default=BASE_OUT_DIR,
@@ -1284,6 +1279,9 @@ def init_args(arguments):
     parser.add_argument("--seed", help="Sets the seed for the random number generator of this script, "
                                        "as well as the sequence generators. (generate)")
     parser.add_argument("--weights", help="DON'T USE IT! format: mw1,mw2,mw3,range_factor")
+    parser.add_argument("--avoid-empty-sequences", action="store_true",
+                        help="Makes sure the simulated MSA contains no empty sequences by resimulating the "
+                             "MSA or not inserting indels into one of the partitions. (generate)")
 
     args = parser.parse_args(arguments)
     if args.operation == "create" and not args.archive_path:
@@ -1307,15 +1305,8 @@ def init_args(arguments):
         except Exception as e:
             parser.error("The seed must be a non-zero, positive integer.")
         random.seed(int(args.seed))
-    if args.use_gaps:
-        global global_use_gaps
-        global_use_gaps = True
-    if args.indel and not args.match_gap_rate:
-        global global_indel_rates
-        indel_rates = args.indel.split(",")
-        global_indel_rates = (float(indel_rates[0]), float(indel_rates[1]))
-    elif args.indel and args.match_gap_rate:
-        parser.error("Mutually exclusive arguments --indel and --match-gap-rate arguments may not be used together!")
+    elif args.indel and args.match_patterns:
+        parser.error("Mutually exclusive arguments --indel and --match-gap-rate may not be used together!")
 
     return args
 
@@ -1548,6 +1539,12 @@ def group_partitions_in_result_dicts(results):
 
 
 def filter_incomplete_groups(grouped_results):
+    """
+    Filters data sets with incomplete partition sets (incomplete due to some partitions being excluded with the
+    SQL query).
+    @param grouped_results: dict mapping tree id to list of tree partition dicts
+    @return:
+    """
     filtered_grouped_results = {}
     for id in grouped_results:
         num_parts = grouped_results[id][0]["OVERALL_NUM_PARTITIONS"]
@@ -1582,7 +1579,7 @@ def assemble_sequences(path_list, out_dir, matrix_path="", in_format=BASE_DAWG_S
                         if not set: no missing data will be introduced
     @param in_format: format of the sequence files to be assembled
     @param out_format: format of the MSA file
-    @return:
+    @return: path of assembled msa file
     """
     out_path = os.path.join(out_dir, f"assembled_sequences.fasta")
     with open(out_path, "w+") as file:
@@ -1616,6 +1613,14 @@ def assemble_sequences(path_list, out_dir, matrix_path="", in_format=BASE_DAWG_S
 
 
 def fix_msa_for_iqt(msa_path):
+    """
+    DEPRECATED and probably shouldn't be used
+    Iterates over all sequences of the MSA. If a sequence is empty, sets the first character of that sequence to 'A'.
+    This is done due to the fact that IQTREE2 would exit with an error if empty sequences are present in the MSA.
+    @param msa_path: path to the msa file to be "fixed"
+    @return:
+    """
+
     records = SeqIO.parse(msa_path, BASE_DAWG_SEQ_FILE_FORMAT.lower())
     new_records = []
     rewrite = False
@@ -1634,7 +1639,42 @@ def fix_msa_for_iqt(msa_path):
                 SeqIO.write(new_rec, file, "fasta")
 
 
+def check_for_empty_matrix_sequences(matrix_path):
+    with open(matrix_path) as file:
+        first_line = True
+        seq_len = 0
+        for line in file:
+            line = line.strip()
+            if first_line:
+                seq_len = int(line.split()[-1])
+                first_line = False
+                continue
+            if not line:
+                continue
+            sequence = "".join(line.split()[1:])
+            if sequence.count("0") == seq_len:
+                return True
+    return False
+
+
+def check_for_empty_sequences(msa_path):
+    counter = 0
+    records = SeqIO.parse(msa_path, BASE_DAWG_SEQ_FILE_FORMAT.lower())
+    for record in records:
+        if record.seq.count("-") == len(record.seq):
+            counter += 1
+    return counter
+
+
 def blank_sequences_in_partition(part_seq_path, part_num, pr_ab_matrix_path):
+    """
+    Fills sequence s[i][p], for partition p and sequence index i,
+    with blank symbols if presence/absence matrix m[i][p] == 0
+    @param part_seq_path: path to partition MSA
+    @param part_num: partition index
+    @param pr_ab_matrix_path: path to presence/absence matrix
+    @return:
+    """
     if pr_ab_matrix_path:
         _, _, pr_ab_matrix = read_pr_ab_matrix(pr_ab_matrix_path)
         records = list(SeqIO.parse(part_seq_path, BASE_DAWG_SEQ_FILE_FORMAT.lower()))
@@ -1667,13 +1707,16 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
                               tree
              returned_paths: list of paths to the downloaded tree sets (which will also contain the generated sequences)
     """
+    penalty_dist = 2    # currently highest "normally" achievable distance is 1
+
+    # preset weights as suggested by our optimizer-optimizing optimizer (TODO: experiment with other gap distributions)
     weights = {
         "mw1": 9,
-        "mw2": 4,
+        "mw2": 10,
         "mw3": 1,
-        "range_factor": 0.8,
+        "range_factor": 0.7,
         "exp_mode": 1,
-        "num_runs": 100,
+        "num_runs": 120,
     }
     if args.weights and args.weights != "control":
         temp_split_weights = args.weights.split(",")
@@ -1776,7 +1819,19 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
 
     key_list = list(grouped_results.keys())
     # TODO: think of ways to fix the following
-    for i in range(int(args.num_msas)):
+    # for i in range(int(args.num_msas)):
+
+    # TODO: the following lines are temporary and to be fixed after the experiments (preventing empty sequences)!!!
+    num_retries = 1
+    no_indel_partition_saved = False
+    no_indel_partition_file = "no_indel_partition_{}.fasta"
+    if args.avoid_empty_sequences:
+        num_retries = 3
+    for i in range(num_retries):
+        # TODO: remove this as well
+        no_indel_partition_saved = False
+        backup_seq_part_path_tuples = []
+
         try:
             # Select tree to generate sequences for
             if not args.use_all_trees:
@@ -1824,13 +1879,34 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
                 else:
                     current_part_num = 0
 
-                seq_part_path = os.path.join(dl_tree_path,
-                                             f"seq_{i}.part{current_part_num}{alignment_file_ext}")  # TODO: do something with the formats...
+                # TODO: do something with the formats...
+                seq_part_path = os.path.join(dl_tree_path, f"seq_{i}.part{current_part_num}{alignment_file_ext}")
                 formatted_seq_path = final_alignment_path.format(seq_part_path)
 
                 # generate a MSA in any case without weights in a "dry run", even if we reoptimize later
                 generator.execute(tree_path, seq_part_path, part)
                 seq_part_path_tuples.append((formatted_seq_path, current_part_num))
+
+
+
+                # TODO: this should be (maybe) reworked eventually!
+                # we save the first "dry run" partition. in case --avoid-empty-sequences is used and we fail to
+                # simulate a MSA without completely empty sequences after multiple attempts, we use this
+                # first partition without indels instead of the normally simulated partition MSA with indels.
+                if not no_indel_partition_saved:
+                    no_indel_partition_file = no_indel_partition_file.format(current_part_num)
+                    no_indel_partition_file = os.path.join(dl_tree_path, no_indel_partition_file)
+                    shutil.copy(formatted_seq_path, no_indel_partition_file)
+                    no_indel_partition_saved = True
+
+                    backup_seq_part_path_tuples.append((no_indel_partition_file, current_part_num))
+                else:
+                    backup_seq_part_path_tuples.append((formatted_seq_path, current_part_num))
+
+                if args.insert_matrix_gaps and pr_ab_matrix_path:
+                    blank_sequences_in_partition(formatted_seq_path, part['PARTITION_NUM'], pr_ab_matrix_path)
+
+
 
                 # save the dry run MSA (makes sure we don't end up with a worse distance after the "optimization")
                 o_sl, o_pn, o_gp = get_msa_params_from_raxml(formatted_seq_path)
@@ -1839,7 +1915,9 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
                 best_suggestion = None
                 shutil.copy(formatted_seq_path, formatted_seq_path + "_bg")
 
-                if args.weights and args.weights != "control":  # TODO: include the new argument
+
+
+                if (args.weights and args.weights != "control") or args.match_patterns:
                     seq_len = part["NUM_ALIGNMENT_SITES"]
                     patterns = part["NUM_PATTERNS"]
                     gaps = part["GAPS"]
@@ -1864,14 +1942,15 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
                                                         indel_distr=indel_distr,
                                                         indel_distr_params=indel_distr_params)
                         if sim_failure:
-                            opt.tell(suggested_point, 1000)
+                            opt.tell(suggested_point, penalty_dist)
                             continue
 
-                        if args.insert_matrix_gaps:
+                        if args.insert_matrix_gaps and pr_ab_matrix_path:
                             blank_sequences_in_partition(formatted_seq_path, part['PARTITION_NUM'], pr_ab_matrix_path)
 
                         o_sl, o_pn, o_gp = get_msa_params_from_raxml(formatted_seq_path)
                         dist = opt_metric(part, o_sl, o_pn, o_gp)
+
                         opt.tell(suggested_point, dist)
 
                         if dist < best_dist:
@@ -1909,6 +1988,24 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
             sorted_seq_paths = [x[0] for x in seq_part_path_tuples]
             assembled_msa_path = assemble_sequences(sorted_seq_paths, out_dir=dl_tree_path, matrix_path=pr_ab_matrix_path)
 
+            if args.avoid_empty_sequences:
+                contains_empty_seqs = check_for_empty_sequences(assembled_msa_path)
+            else:
+                contains_empty_seqs = False
+
+            if contains_empty_seqs:
+                print(f"contains empty {i}")
+
+                if i < num_retries - 1:
+                    continue
+                else:
+                    backup_seq_part_path_tuples.sort(key=lambda x: x[1])
+                    sorted_seq_paths = [x[0] for x in backup_seq_part_path_tuples]
+                    assembled_msa_path = assemble_sequences(sorted_seq_paths, out_dir=dl_tree_path, matrix_path="")
+
+                    with open(os.path.join(dl_tree_path, "failed_to_insert_gaps"), "w+") as file:
+                        file.write("1\n")
+
             # Rewrite partitions file according to simulated MSA
             sim_parts = copy.deepcopy(partitions)
             for key in part_length_dict:
@@ -1916,10 +2013,6 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
                     if key == temp_part["PARTITION_NUM"]:
                         temp_part["NUM_ALIGNMENT_SITES"] = part_length_dict[key]
             write_partitions_file(os.path.dirname(assembled_msa_path), sim_parts, "sim_partitions.txt")
-
-            # TODO: Temporary(?) "fix" of MSAs which contain fully empty sequences for later IQTree2 analysis
-            #       because that thing throws errors otherwise
-            fix_msa_for_iqt(assembled_msa_path)
 
             if args.weights:
                 o_sl, o_pn, o_gp = get_msa_params_from_raxml(assembled_msa_path)
@@ -1940,6 +2033,11 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
                 test_opt_results["seq_len"].append(rand_tree_data['OVERALL_NUM_ALIGNMENT_SITES'])
                 test_opt_results["patterns"].append(rand_tree_data['OVERALL_NUM_PATTERNS'])
                 test_opt_results["gaps"].append(rand_tree_data['OVERALL_GAPS'])
+
+
+            #TODO: remove if the --avoid-empty-sequences flag is reworked!
+            if not contains_empty_seqs:
+                break
 
         except Exception as e:
             print(e)
