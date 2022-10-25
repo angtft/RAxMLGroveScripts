@@ -5,6 +5,7 @@ import collections
 import copy
 import itertools
 import json
+import math
 import os
 import random
 import re
@@ -15,10 +16,17 @@ import subprocess
 import sys
 import traceback
 from io import StringIO
+from typing import Type
 from urllib.request import urlopen
 
 from Bio import Phylo, SeqIO, Seq, SeqRecord
-from skopt import Optimizer, space
+from skopt import Optimizer, space, gp_minimize
+from skopt.utils import use_named_args
+
+#sys.path.insert(1, os.path.dirname(os.path.abspath(__file__)))
+#import tools.SpartaABC.main as sparta
+import tools.util.msa_parser as msa_parser
+import tools.util.modified_SpartaABC as sparta_util
 
 global_max_tree_file_len = 0
 
@@ -38,7 +46,7 @@ BASE_NODE_NAME = "taxon{}"
 
 # Columns to be present in the SQLite database (as lists of tuples of name and data type).
 META_COLUMNS = [
-    ("RG_VERSION", "CHAR(100)"), ("COMMIT_HASH", "CHAR(100)")
+    ("RG_VERSION", "CHAR(100)"), ("COMMIT_HASH", "CHAR(100)"), ("LINK", "CHAR(100)")
 ]
 
 COLUMNS = [
@@ -57,7 +65,7 @@ PARTITION_COLUMNS = [
     ("RATE_STR", "CHAR(5000)"), ("FREQ_STR", "CHAR(2000)"), ("PARTITION_NUM", "INT"),
     ("STATIONARY_FREQ_STR", "CHAR(100)"), ("PROPORTION_INVARIANT_SITES_STR", "CHAR(100)"),
     ("AMONG_SITE_RATE_HETEROGENEITY_STR", "CHAR(100)"), ("ASCERTAINMENT_BIAS_CORRECTION_STR", "CHAR(100)"),
-    ("CUSTOM_CHAR_TO_STATE_MAPPING", "CHAR(100)"), ("PARENT_ID", "INT")
+    ("CUSTOM_CHAR_TO_STATE_MAPPING", "CHAR(100)"), ("PARENT_ID", "CHAR(255)")
 ]
 
 SUBSTITUTION_MODELS = {
@@ -87,8 +95,16 @@ SEQGEN_PATH = os.path.join(BASE_FILE_DIR, "tools", "Seq-Gen-1.3.4")
 ALISIM_PATH = os.path.join(BASE_FILE_DIR, "tools", "iqtree-2.2.0-beta-Linux")
 GENESIS_PATH = os.path.join(BASE_FILE_DIR, "tools", "genesis-0.24.0")
 RAXML_NG_PATH = os.path.join(BASE_FILE_DIR, "tools", "raxml-ng_v1.1.0_linux_x86_64", "raxml-ng")
-SIMULATION_TIMEOUT = 60    # after this number of seconds, the MSA simulating process will be cancelled
+SPARTAABC_PATH = os.path.join(BASE_FILE_DIR, "tools", "SpartaABC", "cpp_code", "SpartaABC")
+
+SIMULATION_TIMEOUT = 20         # after this number of seconds, the MSA simulating process will be cancelled
 SIMULATION_OPT_STOP_THRESH = 0.01
+SPARTA_BURNIN_NUM = 1000       # default values 10k/100k (burn-in/sim)
+SPARTA_SIM_NUM = 10000
+EXTENDED_SPARTA_SIM_NUM = 100   # default 100
+BONK_SIM_NUM = 100
+
+BIG_NUMBER = sys.maxsize
 
 
 def get_tukeys_fences(lst, k=1.5):
@@ -202,86 +218,6 @@ def create_dir_if_needed(path):
 def clear_directory(path):
     for file_name in os.listdir(path):
         os.remove(os.path.join(path, file_name))
-
-
-def test_optimizer_modes(mode, opt_params):
-    if mode == 0:
-        opt = Optimizer([
-            space.Integer(int(opt_params["seq_len"] * (1 - opt_params["range_factor"])),
-                          int(opt_params["seq_len"] * (1 + opt_params["range_factor"]))),
-            (0.0, 0.95),
-            (0.0, 0.95),
-            space.Integer(0, 2),  # ins distribution
-            (1, 10),  # ins 1st param
-            space.Integer(11, 50),  # ins 2nd param
-            space.Integer(0, 2),  # dels distribution
-            (1, 10),  # dels 1st param
-            space.Integer(11, 50)  # dels 2nd param
-        ])
-    elif mode == 1:
-        opt = Optimizer([
-            space.Integer(int(opt_params["seq_len"] * (1 - opt_params["range_factor"])),
-                          int(opt_params["seq_len"] * (1 + opt_params["range_factor"]))),
-            (0.0, 0.95),
-            (0.0, 0.95),
-            space.Integer(1, 10),  # ins 1st param
-            space.Integer(11, 40),  # ins 2nd param
-            space.Integer(1, 10),  # dels 1st param
-            space.Integer(11, 40)  # dels 2nd param
-        ])
-    elif mode == 2:
-        opt = Optimizer([
-            space.Integer(int(opt_params["seq_len"] * (1 - opt_params["range_factor"])),
-                          int(opt_params["seq_len"] * (1 + opt_params["range_factor"]))),
-            (0.0, 0.95),
-            (0.0, 0.95),
-            (1, 4),  # ins 1st param
-            space.Integer(1, 100),  # ins 2nd param
-            (1, 4),  # dels 1st param
-            space.Integer(1, 100)  # dels 2nd param
-        ])
-    else:
-        raise ValueError(f"unknown msa optimizer mode: {mode}")
-    return opt
-
-
-def test_use_optimizer_suggestion(mode, suggested_point):
-    def int_to_distribution(num):
-        if num == 0:
-            return "NB"
-        elif num == 1:
-            return "POW"
-        elif num == 2:
-            return "LAV"
-        else:
-            print("something went wrong!")
-            return "NB"
-
-    new_seq_len = 0
-    indel_rates = ()
-    indel_distr = ()
-    indel_distr_params = ()
-
-    if mode == 0:
-        new_seq_len = int(suggested_point[0])
-        indel_rates = (suggested_point[1], suggested_point[2])
-        indel_distr = (int_to_distribution(suggested_point[3]), int_to_distribution(suggested_point[6]))
-        indel_distr_params = ((suggested_point[4], suggested_point[5]),
-                                            (suggested_point[7], suggested_point[8]))
-    elif mode == 1:
-        new_seq_len = int(suggested_point[0])
-        indel_rates = (suggested_point[1], suggested_point[2])
-        indel_distr = ("NB", "NB")
-        indel_distr_params = ((suggested_point[3], suggested_point[4]),
-                                            (suggested_point[5], suggested_point[6]))
-    elif mode == 2:
-        new_seq_len = int(suggested_point[0])
-        indel_rates = (suggested_point[1], suggested_point[2])
-        indel_distr = ("POW", "POW")
-        indel_distr_params = ((suggested_point[3], suggested_point[4]),
-                                            (suggested_point[5], suggested_point[6]))
-
-    return new_seq_len, indel_rates, indel_distr, indel_distr_params
 
 
 def find_unused_tree_folder_name(root_dir_path, name):
@@ -558,7 +494,7 @@ class AliSim(object):
             model_string = f'{tree_params["MODEL"]}' + "{" \
                            f'{tree_params["RATE_AC"]}/{tree_params["RATE_AG"]}/{tree_params["RATE_CG"]}/{tree_params["RATE_CT"]}/{tree_params["RATE_GT"]}' + "}" \
                            '+F{' + f'{tree_params["FREQ_A"]}/{tree_params["FREQ_C"]}/{tree_params["FREQ_G"]}/{tree_params["FREQ_T"]}' + '}'
-            if tree_params["ALPHA"]:
+            if tree_params["ALPHA"] != "None":
                 model_string += '+G{' + f'{tree_params["ALPHA"]}' + "}"
 
             call = [
@@ -595,7 +531,13 @@ class AliSim(object):
             print(e)
             print(traceback.print_exc())
             return 1
-        return 0
+
+        if os.path.isfile(out_path + ".fa"):
+            # deal with the annoying AliSim naming...
+            os.rename(out_path + ".fa", out_path)
+            return 0
+        else:
+            return 1
 
 
 class BetterTreeDataBase(object):
@@ -771,7 +713,7 @@ class BetterTreeDataBase(object):
             meta_dict = dict(results[0])
             return meta_dict
         except Exception as e:
-            print(f"Exception in get_commit_hash: {e}")
+            print(f"Exception in get_meta_info: {e}")
         return meta_info_dict
 
 
@@ -830,6 +772,11 @@ class RaxmlNGLogReader(object):
                     part_info_dict["GAPS"] = float(line.split()[-2])
                 if line.startswith("Invariant sites:"):
                     part_info_dict["INVARIANT_SITES"] = float(line.split()[-2])
+                if "Loaded alignment with" in line:     # this line is currently not be available in anonymized data!
+                    tres = re.findall("taxa and (.*?) sites", line)
+                    sl = int(tres[0])
+                    part_info_dict["NUM_ALIGNMENT_SITES"] = sl
+
             self.partition_names.append(part_info_dict["name"])
             self.partitions_dict[part_info_dict["name"]].update(part_info_dict)
 
@@ -1238,6 +1185,10 @@ def init_args(arguments):
     parser.add_argument("-a", "--archive-path", help="Sets the raxml out files archive path. (create)")
     parser.add_argument("--rg-commit-hash", help="Sets a specific commit hash of RAxMLGrove in the db metadata. "
                                                  "(create)")
+    parser.add_argument("--download-link", default=BASE_GITHUB_LINK,
+                        help="Sets the source link for the data sets. This argument expects a format string of a "
+                             "GitHub repository link with replacement fields for (1) commit hash, (2) data set id, "
+                             f"and (3) file name. Default: '{BASE_GITHUB_LINK}'. (create)")
     parser.add_argument("-c", "--command", help="The command to execute on the database. (execute)")
     parser.add_argument("-q", "--query", help="Part of the statement after the 'WHERE' clause "
                                               "to find trees in the db. CAUTION: We do not sanitize, "
@@ -1256,8 +1207,9 @@ def init_args(arguments):
                                                         "the tree log data. (generate)")
     # TODO: maybe reintroduce this argument at some point when it is clear how to handle edge cases...
     parser.add_argument("--set-seq-len",
-                        help="CURRENTLY NOT WORKING! Sets the generated sequence length IGNORING the sequence length "
-                             "specified in the tree log data. (generate)")
+                        help=argparse.SUPPRESS)
+                        #help="CURRENTLY NOT WORKING! Sets the generated sequence length IGNORING the sequence length "
+                        #     "specified in the tree log data. (generate)")
     parser.add_argument("--filter-outliers", action='store_true', help="Filters trees with uncommon characteristics "
                                                                        "(using Tukey's fences). (generate)")
     parser.add_argument("--insert-matrix-gaps", action="store_true", help="Uses the presence/absence matrices to "
@@ -1266,9 +1218,11 @@ def init_args(arguments):
     parser.add_argument("--use-all-trees", action="store_true", help="Forces the usage of all found trees instead of "
                                                                      "pulling trees randomly from the set of found "
                                                                      "trees. (generate)")
-    parser.add_argument("--indel", help="CURRENTLY NOT WORKING! Comma separated insertion/deletion rates for the MSA generation. "  # TODO: make this work
-                                        "(generate)")
-    parser.add_argument("--match-patterns", action="store_true",
+    parser.add_argument("--indel",
+                        help=argparse.SUPPRESS)
+                        #help="CURRENTLY NOT WORKING! Comma separated insertion/deletion rates for the MSA generation. "  # TODO: make this work
+                        #                "(generate)")
+    parser.add_argument("--use-bonk", action="store_true",    # TODO: rework this
                         help="Use an optimizer to experiment with different gap indel rates during the MSA simulation "
                              "to get the sequence length, number of patterns and gap proportions of the simulated "
                              "MSA as close as possible to the values in the according RG database entry. (generate)")
@@ -1278,10 +1232,26 @@ def init_args(arguments):
                         help=f"Output directory (default: {BASE_OUT_DIR}). (find, generate)")
     parser.add_argument("--seed", help="Sets the seed for the random number generator of this script, "
                                        "as well as the sequence generators. (generate)")
-    parser.add_argument("--weights", help="DON'T USE IT! format: mw1,mw2,mw3,range_factor")
+    parser.add_argument("--weights",
+                        help=argparse.SUPPRESS)
+                        #help="DON'T USE IT! format: mw1,mw2,mw3,range_factor")         # TODO: this should be removed at this point
+    parser.add_argument("--use-sparta", action="store_true",
+                        help=argparse.SUPPRESS)
+                        #help="DON'T (maybe) USE IT! Uses the slightly modified SpartaABC tool "     # TODO: this
+                        #     "to infer indel rates and sizes from either the available original "
+                        #     "msa.fasta or the according feature vector in the db. (generate)")
+    parser.add_argument("--use-modified-sparta", action="store_true",
+                        help=argparse.SUPPRESS)
+                        #help="DON'T USE IT! Same idea as with '--use-sparta'. Here, however, we give "
+                        #     "a modified distance function to the optimizer. (generate)")
     parser.add_argument("--avoid-empty-sequences", action="store_true",
                         help="Makes sure the simulated MSA contains no empty sequences by resimulating the "
                              "MSA or not inserting indels into one of the partitions. (generate)")
+    parser.add_argument("--use-local-db",
+                        help=argparse.SUPPRESS)
+                        #help="DON'T USE THIS. Sets the specified local path as the source "
+                        #                       "of data sets for MSA simulations. (generate)")
+    parser.add_argument("--no-simulation", action="store_true", help=argparse.SUPPRESS)     # TODO: workaround for our eval pipeline...
 
     args = parser.parse_args(arguments)
     if args.operation == "create" and not args.archive_path:
@@ -1305,8 +1275,12 @@ def init_args(arguments):
         except Exception as e:
             parser.error("The seed must be a non-zero, positive integer.")
         random.seed(int(args.seed))
-    elif args.indel and args.match_patterns:
-        parser.error("Mutually exclusive arguments --indel and --match-gap-rate may not be used together!")
+    elif args.indel and args.use_bonk:
+        parser.error("Mutually exclusive arguments used: --indel and --use-bonk")
+    if args.use_local_db:
+        args.use_local_db = os.path.abspath(args.use_local_db)
+    if args.use_sparta and args.use_modified_sparta:
+        parser.error("Mutually exclusive arguments used: --use-sparta and --use-modified-sparta")
 
     return args
 
@@ -1365,30 +1339,33 @@ def write_partitions_file(dir_path, partition_results, file_name=""):
             file.write(line)
 
 
-def download_trees(dest_path, result, commit_hash, grouped_result, amount=0, forced_out_dir=""):
+def download_trees(dest_path, grouped_result, commit_hash, keys=[], amount=0, forced_out_dir="", source_dir=""):
     """
-    Downloades a data set from GitHub, also can save the tree dict (result) in the destination directory
+    Downloads a data set from GitHub, also can save the tree dict (result) in the destination directory
     @param dest_path: destination directory path
-    @param result: result dict of the tree to download (deprecated)
-    @param commit_hash: commit hash of the RG repo (since the tree ids might change between different RG versions)
     @param grouped_result: may be passed if the tree dict is to be saved as well
+    @param commit_hash: commit hash of the RG repo (since the tree ids might change between different RG versions)
+    @param keys: if set, will use the tree ids in that list to download trees (instead of iterating over keys in
+                 grouped_results)
     @param amount: amount of data sets to download (if result dict > amount)
     @param forced_out_dir: will use that directory name if set, otherwise uses the tree id as the directory name
+    @param source_dir: database directory, in case a local source is used
     @return: list of paths to the downloaded data sets
     """
 
     returned_paths = []
-    tree_keys = list(grouped_result.keys())
+    tree_keys = keys if keys else list(grouped_result.keys())
     try:
         for i in range(amount):
-            current_key = i % len(result)
-            dct = result[current_key]
-            tree_id = dct["TREE_ID"]
+            current_index = i % len(tree_keys)
+            tree_id = tree_keys[current_index]
+            dct = grouped_result[tree_id]
+
             print(f"downloading {tree_id}")
             dir_path = os.path.join(dest_path, tree_id) if not forced_out_dir else os.path.join(dest_path,
                                                                                                 forced_out_dir)
             possible_files = [
-                "tree_best.newick", "tree_part.newick", "log_0.txt", "model_0.txt", "iqt.pr_ab_matrix"
+                "tree_best.newick", "tree_part.newick", "log_0.txt", "model_0.txt", "iqt.pr_ab_matrix", "msa.fasta"
             ]
             create_dir_if_needed(dir_path)
             if grouped_result:
@@ -1397,14 +1374,24 @@ def download_trees(dest_path, result, commit_hash, grouped_result, amount=0, for
                 if len(grouped_result[tree_id]) > 1:
                     write_partitions_file(dir_path, grouped_result[tree_id])
 
-            for file_name in possible_files:
-                try:
-                    with urlopen(BASE_GITHUB_LINK.format(commit_hash, tree_id, file_name)) as webpage:
-                        content = webpage.read().decode()
-                    with open(os.path.join(dir_path, file_name), "w+") as output:
-                        output.write(content)
-                except Exception as e:
-                    pass
+            if not source_dir:
+                for file_name in possible_files:
+                    try:
+                        with urlopen(BASE_GITHUB_LINK.format(commit_hash, tree_id, file_name)) as webpage:
+                            content = webpage.read().decode()
+                        with open(os.path.join(dir_path, file_name), "w+") as output:
+                            output.write(content)
+                    except Exception as e:
+                        pass
+            else:
+                for file_name in possible_files:
+                    try:
+                        file_path = os.path.join(source_dir, tree_id, file_name)
+                        dest_file_path = os.path.join(dir_path, file_name)
+                        shutil.copy(file_path, dest_file_path)
+                    except Exception as e:
+                        pass
+
             returned_paths.append(dir_path)
     except Exception as e:
         print("Error while downloading: {}".format(e))
@@ -1522,6 +1509,25 @@ def read_pr_ab_matrix(path):
     return num_0, num_1, matrix
 
 
+def read_pr_ab_matrix2(path):
+    entries = collections.defaultdict(lambda: collections.defaultdict(lambda: 1))
+    with open(path) as file:
+        first_line = True
+        num_bits = 0
+
+        for line in file:
+            split_line = line.strip().split()
+            if first_line:
+                first_line = False
+                num_bits = int(split_line[1])
+                continue
+
+            taxon = split_line[0]
+            for i in range(1, num_bits + 1):
+                entries[i - 1][taxon] = int(split_line[i])
+    return entries
+
+
 def group_partitions_in_result_dicts(results):
     """
     Groups partitions of the same tree
@@ -1567,13 +1573,13 @@ def get_msa_gap_rate(msa_path):
     return num_gaps / (seq_len * num_taxa)
 
 
-def assemble_sequences(path_list, out_dir, matrix_path="", in_format=BASE_DAWG_SEQ_FILE_FORMAT.lower(),
+def assemble_sequences(path_list, out_path, matrix_path="", in_format=BASE_DAWG_SEQ_FILE_FORMAT.lower(),
                        out_format="fasta"):
     """
     Concatenates multiple MSAs into a single file. We use this to create a big MSA file out of separately generated
     per-partition-MSAs.
     @param path_list: list of MSA file paths
-    @param out_dir: output directory for the assembled MSA file
+    @param out_path: output path of the assembled MSA file
     @param matrix_path: path to the presence/absence matrix to use
                         if set: sequence i in partition p will be filled with blank symbols if matrix[i, p] == 0
                         if not set: no missing data will be introduced
@@ -1581,7 +1587,7 @@ def assemble_sequences(path_list, out_dir, matrix_path="", in_format=BASE_DAWG_S
     @param out_format: format of the MSA file
     @return: path of assembled msa file
     """
-    out_path = os.path.join(out_dir, f"assembled_sequences.fasta")
+    # out_path = os.path.join(out_dir, f"assembled_sequences.fasta")
     with open(out_path, "w+") as file:
         file.write("")
 
@@ -1639,6 +1645,11 @@ def fix_msa_for_iqt(msa_path):
                 SeqIO.write(new_rec, file, "fasta")
 
 
+def fix_msa_for_sparta(source_path, dest_path, data_type="DNA"):
+    sequences = msa_parser.parse_and_fix_msa_somehow(source_path, data_type)
+    msa_parser.save_msa(sequences, dest_path, msa_format="fasta")
+
+
 def check_for_empty_matrix_sequences(matrix_path):
     with open(matrix_path) as file:
         first_line = True
@@ -1692,99 +1703,297 @@ def blank_sequences_in_partition(part_seq_path, part_num, pr_ab_matrix_path):
                 SeqIO.write(new_rec, file, BASE_DAWG_SEQ_FILE_FORMAT.lower())
 
 
-def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir=""):
-    """
-    Generates sequences based on the result dict, using Dawg or Seq-Gen.
-    If args.seed is set, it will be used for the generators.
-    If args.insert_matrix_gaps is set, the script will first generate MSAs for every partition, then assemble
-        them into a single MSA file
-    @param grouped_results: dict mapping tree id to list of tree partition dicts
-    @param args: arguments object
-    @param meta_info_dict: dict containing meta info, such as the commit hash of the current db
-    @param forced_out_dir: if set, the used output directory will carry that name,
-                           instead of setting the tree id as the out directory's name
-    @return: grouped_results: dict which contains for every tree_id a list of tree_dicts for every partition in that
-                              tree
-             returned_paths: list of paths to the downloaded tree sets (which will also contain the generated sequences)
-    """
-    penalty_dist = 2    # currently highest "normally" achievable distance is 1
+def split_msa(msa_path, part_path="", msa_format="fasta"):
+    msa_dir = os.path.dirname(msa_path)
+    sequences = msa_parser.parse_msa_somehow(msa_path)
+    seq_len = len(sequences[0].sequence)
+    names = [s.id for s in sequences]
 
-    # preset weights as suggested by our optimizer-optimizing optimizer (TODO: experiment with other gap distributions)
-    weights = {
-        "mw1": 9,
-        "mw2": 10,
-        "mw3": 1,
-        "range_factor": 0.7,
-        "exp_mode": 1,
-        "num_runs": 120,
-    }
-    if args.weights and args.weights != "control":
-        temp_split_weights = args.weights.split(",")
-        weights = {
-            "mw1": float(temp_split_weights[0]),
-            "mw2": float(temp_split_weights[1]),
-            "mw3": float(temp_split_weights[2]),
-            "range_factor": float(temp_split_weights[3]),
-            "exp_mode": int(temp_split_weights[4]),
-            "num_runs": int(temp_split_weights[5]),
-        }
-    test_opt_results = collections.defaultdict(lambda: [])
-
-    def opt_metric2(part_seq_len, part_patterns, part_gaps, sim_seq_len, sim_patterns, sim_gaps):
-        gap_den = max(part_gaps, sim_gaps)
-        if gap_den == 0:
-            gap_den = 1
-
-        temp_dist = weights["mw1"] * abs(part_seq_len - sim_seq_len) / max(part_seq_len, sim_seq_len) + \
-                    weights["mw2"] * abs(part_patterns - sim_patterns) / max(part_patterns, sim_patterns) + \
-                    weights["mw3"] * abs(part_gaps - sim_gaps) / gap_den
-        norm_dist = temp_dist / (weights["mw1"] + weights["mw2"] + weights["mw3"])
-
-        return norm_dist
-
-    def opt_metric(part_dict, sim_seq_len, sim_patterns, sim_gaps):
-        part_seq_len = part_dict["NUM_ALIGNMENT_SITES"]
-        part_patterns = part_dict["NUM_PATTERNS"]
-        part_gaps = part["GAPS"]
-
-        return opt_metric2(part_seq_len, part_patterns, part_gaps, sim_seq_len, sim_patterns, sim_gaps)
-
-    def get_msa_params_from_raxml(msa_path):
-        raxml_path = RAXML_NG_PATH
-        msa_dir = os.path.dirname(msa_path)
-        prefix = "parse"
-
-        command = [
-            raxml_path, "--parse",
-            "--msa", msa_path,
-            "--model", "GTR+G",
-            "--prefix", prefix,
-            "--redo"
-        ]
-        subprocess.check_output(command, cwd=msa_dir)
-        raxml_log_path = os.path.join(msa_dir, f"{prefix}.raxml.log")
-
-        sl = pn = gp = 0
-        with open(raxml_log_path) as file:
+    part_dict = {}
+    part_sites = collections.defaultdict(lambda: {})
+    part_seqs = collections.defaultdict(lambda: collections.defaultdict(lambda: []))
+    if not os.path.isfile(part_path):
+        temp_msa_path = os.path.join(msa_dir, f"temp_msa_part_0.{msa_format}")
+        part_dict[0] = temp_msa_path
+        msa_parser.save_msa(sequences, temp_msa_path, msa_format=msa_format)
+    else:
+        with open(part_path) as file:
             for line in file:
-                if line.startswith("Alignment sites / patterns:"):
-                    line = line.replace(" ", "").split(":")
-                    # sl = int(line[1].split("/")[0])
-                    pn = int(line[1].split("/")[1])
-                elif line.startswith("Gaps:"):
-                    line = line.replace(" ", "").split(":")
-                    gp = float(line[1].split("%")[0])
-                elif "Loaded alignment with" in line:
-                    tres = re.findall("taxa and (.*?) sites", line)
-                    sl = int(tres[0])
-        return sl, pn, gp
+                line = line.strip()
+                model_string, all_site_string = line.split("=")
+                part_id = int(model_string.split(",")[-1].split("_")[-1])
+                site_strings = [s.strip() for s in all_site_string.split(",")]
+                for site_string in site_strings:
+                    if "-" in site_string:
+                        start_n, end_n = map(int, site_string.split("-"))
+                        for i in range(start_n, end_n + 1):
+                            part_sites[part_id][i] = 1
+                    elif "/" in site_string:
+                        offset, step = map(int, site_string.split("/"))
+                        for i in range(offset, seq_len, step=step):
+                            part_sites[part_id][i] = 1
+                    else:
+                        site_n = int(site_string)
+                        part_sites[part_id][site_n] = 1
+        for sequence in sequences:
+            seq = sequence.sequence
+            name = sequence.id
 
-    returned_paths = []
-    returned_results = {}
+            for part_id in part_sites:
+                part_seq = "".join([seq[i-1] if i in part_sites[part_id] else "" for i in range(1, len(seq)+1)])
+                part_seqs[part_id][name] = part_seq
 
-    temp_tree_dir = os.path.join(os.path.abspath(args.out_dir))
-    create_dir_if_needed(temp_tree_dir)
+        part_len_sum = sum([len(part_seqs[part_id][names[0]]) for part_id in part_seqs])
+        if part_len_sum != seq_len:
+            raise ValueError(f"something went wrong during MSA split (lengths mismatch: {part_len_sum} vs {seq_len})!")
 
+        for part_id in part_seqs:
+            temp_seqs = [msa_parser.Sequence(name, part_seqs[part_id][name], comment="") for name in names]
+            temp_msa_path = os.path.join(msa_dir, f"temp_msa_part_{part_id}.{msa_format}")
+
+            part_dict[part_id] = temp_msa_path
+            msa_parser.save_msa(temp_seqs, temp_msa_path, msa_format=msa_format)
+
+    return part_dict
+
+
+def get_msa_params_from_raxml(msa_path):
+    raxml_path = RAXML_NG_PATH
+    msa_dir = os.path.dirname(msa_path)
+    prefix = "parse"
+
+    command = [
+        raxml_path, "--parse",
+        "--msa", msa_path,
+        "--model", "GTR+G",
+        "--prefix", prefix,
+        "--redo"
+    ]
+    subprocess.check_output(command, cwd=msa_dir)
+    raxml_log_path = os.path.join(msa_dir, f"{prefix}.raxml.log")
+
+    sl = pn = gp = 0
+    with open(raxml_log_path) as file:
+        for line in file:
+            if line.startswith("Alignment sites / patterns:"):
+                line = line.replace(" ", "").split(":")
+                # sl = int(line[1].split("/")[0])
+                pn = int(line[1].split("/")[1])
+            elif line.startswith("Gaps:"):
+                line = line.replace(" ", "").split(":")
+                gp = float(line[1].split("%")[0])
+            elif "Loaded alignment with" in line:
+                tres = re.findall("taxa and (.*?) sites", line)
+                sl = int(tres[0])
+    return sl, pn, gp
+
+
+def fix_tree_for_indelible(source_path, dest_path):
+    """
+    INDELible has strange issues reading newick tree files. We try to avoid some of these.
+    @param source_path: source tree path
+    @param dest_path: dest path of "fixed" tree
+    @return:
+    """
+    def traverse_and_fix_branches(clade):
+        if clade.branch_length:
+            clade.branch_length = float(clade.branch_length)
+        for c in clade.clades:
+            traverse_and_fix_branches(c)
+
+    with open(source_path) as file:
+        for line in file:
+            handle = StringIO(line)
+    tree = Phylo.read(handle, "newick")
+    traverse_and_fix_branches(tree.root)
+
+    Phylo.write(tree, dest_path, BASE_TREE_FORMAT, plain=False, format_branch_length="%.16f")
+    with open(dest_path) as file:
+        new_tree_str = file.read()
+    new_tree_str = new_tree_str.replace(":0.0000000000000000;", ";")
+    with open(dest_path, "w+") as file:
+        file.write(new_tree_str)
+
+
+class SimMSAEval:
+    def __init__(self, part_dict, tree_path, msa_out_path, reference_features, distance_class, generator=None, weights=[],
+                 data_type="DNA", matrix_path=""):
+
+        if generator:
+            self.generator = generator
+        else:
+            self.generator = AliSim(ALISIM_PATH)
+        self.part_dict = part_dict
+        self.tree_path = tree_path
+        self.msa_out_path = msa_out_path
+        self.msa_dir = os.path.dirname(msa_out_path)
+        self.reference_features = reference_features
+        self.distance_obj = distance_class()
+        self.weights = weights
+        self.data_type = data_type
+        self.matrix_entries = None
+        if matrix_path:
+            self.matrix_entries = read_pr_ab_matrix2(matrix_path)
+
+        self.min_dist = BIG_NUMBER
+        self.step_counter = 0
+
+    @classmethod
+    def using_sequences(cls, part_dict, tree_path, msa_out_path, sequences, distance_class, **kwargs):
+        reference_features = distance_class().features(sequences)
+        return cls(part_dict, tree_path, msa_out_path, reference_features, distance_class, **kwargs)
+
+
+    def evaluate(self, sim_params, num_repeats=5):
+        temp_msa_path = os.path.join(self.msa_dir, "temp_sim_msa_eval.fasta")
+        temp_dists = []
+
+        print(f"step {self.step_counter}: {sim_params}")
+        self.step_counter += 1
+        for _ in range(num_repeats):
+            sim_error = self.generator.execute(
+                self.tree_path,
+                temp_msa_path,
+                self.part_dict,
+                new_seq_len=sim_params[0],
+                indel_rates=(sim_params[1], sim_params[2]),
+                indel_distr=("POW", "POW"),
+                indel_distr_params=((sim_params[3], 500), (sim_params[4], 500))
+            )
+            dist = "N/A"
+            try:
+                if sim_error:
+                    temp_dists.append(BIG_NUMBER)
+                else:
+                    temp_sequences = msa_parser.parse_and_fix_msa_somehow(temp_msa_path, self.data_type)
+                    if self.matrix_entries:
+                        for sequence in temp_sequences:
+                            if self.matrix_entries[self.part_dict["PARTITION_NUM"]][sequence.id] == 0:
+                                sequence.sequence = "-" * len(sequence.sequence)
+
+                    temp_features = self.distance_obj.features(temp_sequences)
+                    dist = self.distance_obj.distance(self.reference_features, temp_features, self.weights)
+
+                    if dist < self.min_dist:
+                        self.min_dist = dist
+                        shutil.copy(temp_msa_path, self.msa_out_path)
+                        print("    new min!")
+                    temp_dists.append(dist)
+
+                print(f"    {dist}")
+            except Exception as e:
+                temp_dists.append(BIG_NUMBER)
+                print(f"    {dist}")
+
+        return statistics.mean(temp_dists)
+
+
+def simulate_msa_with_sparta(part_dict, msa_path, tree_path, msa_out_path, generator):
+    fixed_tree_path = tree_path + "_mod"
+    fix_tree_for_indelible(tree_path, fixed_tree_path)
+    fixed_msa_path = msa_path + "_mod"
+    fix_msa_for_sparta(msa_path, fixed_msa_path)
+
+    msa_dir = os.path.dirname(msa_path)
+    command = [
+        "--path", msa_dir,
+        "--msaf", fixed_msa_path,
+        "--trf", fixed_tree_path,
+        "--mode", "nuc",     # TODO: expand this eventually
+        "--freq", str((part_dict["FREQ_A"], part_dict["FREQ_C"], part_dict["FREQ_G"], part_dict["FREQ_T"])),
+        "--submodel", "GTR",
+        "--rates", str((part_dict["RATE_AC"], part_dict["RATE_AG"], part_dict["RATE_AT"], part_dict["RATE_CG"],
+                   part_dict["RATE_CT"])),
+        "--nsim", f"{SPARTA_SIM_NUM}",     # TODO: adjust this
+        "--nburnin", f"{SPARTA_BURNIN_NUM}",
+         "--only-indelible",
+    ]
+    try:
+        sparta.run(command)
+    except Exception as e:
+        print(e)
+
+    sparta_out_path = os.path.join(msa_dir, "SpartaABC_data_name_iddif.posterior_params")   # TODO: we use the RIM stuff
+    rl = r_i = r_d = a_i = a_d = 0
+    weights = []
+    with open(sparta_out_path) as file:
+        for line in file:
+            line = line.strip()
+            if line.startswith("The posterior expectation for the root length (RL) is:"):
+                rl = int(float(line.split(":")[-1]))
+            if line.startswith("The posterior expectation for the A Insertion parameter is:"):
+                a_i = float(line.split(":")[-1])
+            if line.startswith("The posterior expectation for the A Deletion parameter is:"):
+                a_d = float(line.split(":")[-1])
+            if line.startswith("The posterior expectation for the indel rate (InsR) is:"):
+                r_i = float(line.split(":")[-1])
+            if line.startswith("The posterior expectation for the indel rate (DelR) is:"):
+                r_d = float(line.split(":")[-1])
+            if line.startswith("weights"):
+                weights = [float(s) for s in line.split()[1:]]
+
+    sequences = msa_parser.parse_and_fix_msa_somehow(msa_path, part_dict["DATA_TYPE"])
+    eval = SimMSAEval.using_sequences(part_dict, tree_path, msa_out_path, sequences, weights=weights,
+                      distance_class=sparta_util.SpartaDist, generator=generator)
+    eval.evaluate([rl, r_i, r_d, a_i, a_d])
+
+    print(f"orig: {get_msa_params_from_raxml(fixed_msa_path)}")
+    print(f"sim: {get_msa_params_from_raxml(msa_out_path)}")
+
+
+def simulate_msa_with_extended_sparta(part_dict, msa_path, tree_path, msa_out_path, generator,
+                           dist_function=sparta_util.sparta_extended_dist):
+
+    rl = part_dict["NUM_ALIGNMENT_SITES"]
+    rl_s = 0.5
+    num_rounds = EXTENDED_SPARTA_SIM_NUM
+
+    search_space = [
+        space.Integer(int(rl * (1 - rl_s)), rl, name="rl"),
+        space.Real(0.0, 0.05, name="r_i"),    # TODO: try log-uniform distributions
+        space.Real(0.0, 0.05, name="r_d"),
+        space.Real(1.001, 2, name="a_i"),
+        space.Real(1.001, 2, name="a_d")
+    ]
+
+    # TODO: fix that mess with weights somehow
+    weights = []
+    sequences = msa_parser.parse_and_fix_msa_somehow(msa_path, part_dict["DATA_TYPE"])
+    evaluator = SimMSAEval.using_sequences(part_dict, tree_path, msa_out_path, sequences, weights=weights,
+                                      distance_class=sparta_util.SpartaDist, generator=generator)
+    gp_res = gp_minimize(evaluator.evaluate, search_space, n_calls=num_rounds)
+
+    print(f"orig: {get_msa_params_from_raxml(msa_path)}")
+    print(f"sim: {get_msa_params_from_raxml(msa_out_path)}")
+
+
+def simulate_msa_with_bonk(part_dict, tree_path, msa_out_path, generator, matrix_path=""):
+    rl = part_dict["NUM_ALIGNMENT_SITES"]
+    rl_s = 0.7
+    num_rounds = BONK_SIM_NUM
+
+    search_space = [
+        space.Integer(int(rl * (1 - rl_s)), rl, name="rl"),
+        space.Real(0.0, 0.05, name="r_i"),    # TODO: try log-uniform distributions
+        space.Real(0.0, 0.05, name="r_d"),
+        space.Real(1.001, 2, name="a_i"),
+        space.Real(1.001, 2, name="a_d")
+    ]
+
+    # TODO: fix that mess with weights somehow
+    weights = [9, 10, 1]
+    dist_class = sparta_util.BlindDist
+    reference_features = dist_class().features_from_part_dict(part_dict)
+    evaluator = SimMSAEval(part_dict, tree_path, msa_out_path, reference_features, dist_class,
+                           generator=generator, weights=weights, data_type=part_dict["DATA_TYPE"],
+                           matrix_path=matrix_path)
+    gp_res = gp_minimize(evaluator.evaluate, search_space, n_calls=num_rounds)
+
+    print(f"orig: {reference_features}")
+    print(f"sim: {get_msa_params_from_raxml(msa_out_path)}")
+
+
+def create_generator(args):
     final_alignment_path = "{}"
     if args.generator == "seq-gen":
         raise ValueError("seq-gen currently not working!")
@@ -1796,263 +2005,131 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
     else:
         generator = AliSim(ALISIM_PATH)
         alignment_file_ext = f""
-        final_alignment_path = "{}.fa"
 
     if args.seed:
         generator.set_seed(args.seed)
         print(f"Seed: {args.seed}")
+    return generator, alignment_file_ext, final_alignment_path
 
+
+def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir=""):
+    generator, alignment_file_ext, final_alignment_path = create_generator(args)
     print(f"Using {args.generator}.")
 
-    for key in list(grouped_results.keys()):
-        # Currently we only support DNA with GTR model, and since our query would filter other partitions
-        # some data sets would potentially have partitions missing (e.g., when different partitions use different
-        # data types). Here we remove data sets with an incomplete set of partitions.
-        try:
-            num_parts = grouped_results[key][0]["OVERALL_NUM_PARTITIONS"]
-            if num_parts != len(grouped_results[key]):
-                del grouped_results[key]
-        except Exception as e:
-            print(e)
-            print(traceback.print_exc())
-            del grouped_results[key]
+    out_dir = os.path.join(os.path.abspath(args.out_dir))
+    create_dir_if_needed(out_dir)
 
-    key_list = list(grouped_results.keys())
-    # TODO: think of ways to fix the following
-    # for i in range(int(args.num_msas)):
+    returned_paths = []
+    returned_results = {}
 
-    # TODO: the following lines are temporary and to be fixed after the experiments (preventing empty sequences)!!!
+    rand_key = random.choice(list(grouped_results.keys()))
+    rand_tree_data = grouped_results[rand_key][0]
+
+    print(rand_tree_data)
+
+    # Download tree
+    tree_dir_name = forced_out_dir
+    if not forced_out_dir:
+        tree_dir_name = find_unused_tree_folder_name(out_dir, rand_tree_data["TREE_ID"])
+        dl_tree_path = os.path.join(out_dir, tree_dir_name)
+    else:
+        dl_tree_path = os.path.join(out_dir, forced_out_dir)
+
+    # TODO: currently only one data set is downloaded, maybe change it again in future
+    returned_paths.extend(download_trees(out_dir, grouped_results, meta_info_dict["COMMIT_HASH"],
+                                         keys=[rand_key],
+                                         amount=1, forced_out_dir=tree_dir_name,
+                                         source_dir=args.use_local_db))
+    if args.no_simulation:
+        write_partitions_file(dl_tree_path, grouped_results[rand_key], "sim_partitions.txt")
+        returned_results[rand_key] = grouped_results[rand_key]
+        return returned_results, returned_paths
+
     num_retries = 1
-    no_indel_partition_saved = False
-    no_indel_partition_file = "no_indel_partition_{}.fasta"
+    pr_ab_matrix_path = os.path.join(dl_tree_path, "iqt.pr_ab_matrix")
+    # TODO: maybe also use pr/absence matrices with the sparta stuff
+    if not os.path.isfile(pr_ab_matrix_path) or args.use_sparta or args.use_modified_sparta:
+        pr_ab_matrix_path = ""
+
+    assembled_msa_path = os.path.join(dl_tree_path, "assembled_sequences.fasta")
+    backup_seq_part_path_tuples = []
     if args.avoid_empty_sequences:
         num_retries = 3
     for i in range(num_retries):
-        # TODO: remove this as well
         no_indel_partition_saved = False
+        no_indel_partition_file = "no_indel_partition_{}.fasta"
         backup_seq_part_path_tuples = []
 
-        try:
-            # Select tree to generate sequences for
-            if not args.use_all_trees:
-                rand_key = random.choice(key_list)
+        returned_results[rand_key] = grouped_results[rand_key]
+        tree_path = os.path.join(dl_tree_path, BASE_TREE_NAME.format("best", BASE_TREE_FORMAT))
+
+        seq_part_path_tuples = []
+        partitions = grouped_results[rand_key]
+        part_msa_paths = {}
+
+        if args.use_sparta or args.use_modified_sparta:
+            # TODO: rework. if msa.fasta is not available, the (currently not existing) feature vector
+            #  from db should be used
+            msa_path = os.path.join(dl_tree_path, "msa.fasta")
+            model_path = os.path.join(dl_tree_path, "model_0.txt")
+            if not os.path.isfile(msa_path) or not os.path.isfile(model_path):
+                print(f"cannot use sparta since original msa or model file not found for tree {rand_key}!")
+                return
+
+            part_msa_paths = split_msa(msa_path, part_path=model_path, msa_format="fasta")
+
+        for part in partitions:
+            if part["PARTITION_NUM"] == "None":
+                part["PARTITION_NUM"] = 0
+            current_part_num = part["PARTITION_NUM"]
+
+            # TODO: do something with the formats...
+            seq_part_path = os.path.join(dl_tree_path, f"seq_{i}.part{current_part_num}.fasta")
+            formatted_seq_path = final_alignment_path.format(seq_part_path)
+
+            # generate an MSA in any case without weights in a "dry run", even if we reoptimize later
+            generator.execute(tree_path, seq_part_path, part)
+            seq_part_path_tuples.append((formatted_seq_path, current_part_num))
+
+            # TODO: this should be (maybe) reworked eventually!
+            # we save the first "dry run" partition. in case --avoid-empty-sequences is used and we fail to
+            # simulate a MSA without completely empty sequences after multiple attempts, we use this
+            # first partition without indels instead of the normally simulated partition MSA with indels.
+            if not no_indel_partition_saved and args.avoid_empty_sequences:
+                no_indel_partition_file = no_indel_partition_file.format(current_part_num)
+                no_indel_partition_file = os.path.join(dl_tree_path, no_indel_partition_file)
+                shutil.copy(formatted_seq_path, no_indel_partition_file)
+                no_indel_partition_saved = True
+
+                backup_seq_part_path_tuples.append((no_indel_partition_file, current_part_num))
             else:
-                rand_key = key_list[i % len(key_list)]
-            rand_tree_data = grouped_results[rand_key][0]
-            print(f"\nRun {i}. Selected tree:\n {rand_tree_data}")
+                backup_seq_part_path_tuples.append((formatted_seq_path, current_part_num))
 
-            # Set sequence length
-            if rand_tree_data["NUM_ALIGNMENT_SITES"] == "None":
-                rand_tree_data["NUM_ALIGNMENT_SITES"] = int(args.seq_len)
-            if args.set_seq_len:
-                rand_tree_data["NUM_ALIGNMENT_SITES"] = int(args.set_seq_len)
-
-            # Download tree
-            tree_folder_name = forced_out_dir
-            if not forced_out_dir:
-                tree_folder_name = find_unused_tree_folder_name(temp_tree_dir, rand_tree_data["TREE_ID"])
-                dl_tree_path = os.path.join(temp_tree_dir, tree_folder_name)
+            if args.use_sparta:
+                simulate_msa_with_sparta(part, part_msa_paths[current_part_num], tree_path, seq_part_path, generator)
+            elif args.use_modified_sparta:
+                simulate_msa_with_extended_sparta(part, part_msa_paths[current_part_num], tree_path, seq_part_path,
+                                                  generator, dist_function=sparta_util.sparta_extended_dist)
+            elif args.use_bonk or args.weights:
+                simulate_msa_with_bonk(part, tree_path, seq_part_path, generator, matrix_path=pr_ab_matrix_path)
             else:
-                dl_tree_path = os.path.join(temp_tree_dir, forced_out_dir)
-            returned_paths.extend(download_trees(temp_tree_dir, [rand_tree_data], meta_info_dict["COMMIT_HASH"],
-                                                 grouped_results,
-                                                 amount=1, forced_out_dir=tree_folder_name))
-            returned_results[rand_key] = grouped_results[rand_key]
-            tree_path = os.path.join(dl_tree_path, BASE_TREE_NAME.format("best", BASE_TREE_FORMAT))
-
-            # Get presence/absence matrix path if needed
-            if args.insert_matrix_gaps:
-                pr_ab_matrix_path = os.path.join(dl_tree_path, "iqt.pr_ab_matrix")
-                if not os.path.isfile(pr_ab_matrix_path):
-                    pr_ab_matrix_path = ""
-            else:
-                pr_ab_matrix_path = ""
-
-            seq_part_path_tuples = []
-            partitions = grouped_results[rand_key]
-            part_length_dict = {}
-
-            # Generate per-partition MSAs
-            for part in partitions:
-                if part['PARTITION_NUM']:
-                    current_part_num = part['PARTITION_NUM']
-                else:
-                    current_part_num = 0
-
-                # TODO: do something with the formats...
-                seq_part_path = os.path.join(dl_tree_path, f"seq_{i}.part{current_part_num}{alignment_file_ext}")
-                formatted_seq_path = final_alignment_path.format(seq_part_path)
-
-                # generate a MSA in any case without weights in a "dry run", even if we reoptimize later
                 generator.execute(tree_path, seq_part_path, part)
-                seq_part_path_tuples.append((formatted_seq_path, current_part_num))
 
+        # Assemble MSAs
+        seq_part_path_tuples.sort(key=lambda x: x[1])
+        sorted_seq_paths = [x[0] for x in seq_part_path_tuples]
+        assemble_sequences(sorted_seq_paths, assembled_msa_path, matrix_path=pr_ab_matrix_path)
 
+    if args.avoid_empty_sequences:
+        if check_for_empty_sequences(assembled_msa_path):
+            backup_seq_part_path_tuples.sort(key=lambda x: x[1])
+            sorted_seq_paths = [x[0] for x in backup_seq_part_path_tuples]
+            assemble_sequences(sorted_seq_paths, assembled_msa_path, matrix_path=pr_ab_matrix_path)
 
-                # TODO: this should be (maybe) reworked eventually!
-                # we save the first "dry run" partition. in case --avoid-empty-sequences is used and we fail to
-                # simulate a MSA without completely empty sequences after multiple attempts, we use this
-                # first partition without indels instead of the normally simulated partition MSA with indels.
-                if not no_indel_partition_saved:
-                    no_indel_partition_file = no_indel_partition_file.format(current_part_num)
-                    no_indel_partition_file = os.path.join(dl_tree_path, no_indel_partition_file)
-                    shutil.copy(formatted_seq_path, no_indel_partition_file)
-                    no_indel_partition_saved = True
+            with open(os.path.join(dl_tree_path, "failed_to_insert_gaps"), "w+") as file:
+                file.write("1\n")
 
-                    backup_seq_part_path_tuples.append((no_indel_partition_file, current_part_num))
-                else:
-                    backup_seq_part_path_tuples.append((formatted_seq_path, current_part_num))
-
-                if args.insert_matrix_gaps and pr_ab_matrix_path:
-                    blank_sequences_in_partition(formatted_seq_path, part['PARTITION_NUM'], pr_ab_matrix_path)
-
-
-
-                # save the dry run MSA (makes sure we don't end up with a worse distance after the "optimization")
-                o_sl, o_pn, o_gp = get_msa_params_from_raxml(formatted_seq_path)
-                dist = opt_metric(part, o_sl, o_pn, o_gp)
-                best_dist = dist
-                best_suggestion = None
-                shutil.copy(formatted_seq_path, formatted_seq_path + "_bg")
-
-
-
-                if (args.weights and args.weights != "control") or args.match_patterns:
-                    seq_len = part["NUM_ALIGNMENT_SITES"]
-                    patterns = part["NUM_PATTERNS"]
-                    gaps = part["GAPS"]
-                    range_factor = weights["range_factor"]
-
-                    opt_params = {
-                        "seq_len": seq_len,
-                        "range_factor": range_factor
-                    }
-                    opt = test_optimizer_modes(weights["exp_mode"], opt_params)
-
-                    for opt_round in range(weights["num_runs"]):
-                        suggested_point = opt.ask()
-                        print(f"round {opt_round}: {suggested_point}")
-                        new_seq_len, indel_rates, indel_distr, indel_distr_params = test_use_optimizer_suggestion(weights["exp_mode"], suggested_point)
-
-                        sim_failure = generator.execute(tree_path,
-                                                        seq_part_path,
-                                                        part,
-                                                        new_seq_len=new_seq_len,
-                                                        indel_rates=indel_rates,
-                                                        indel_distr=indel_distr,
-                                                        indel_distr_params=indel_distr_params)
-                        if sim_failure:
-                            opt.tell(suggested_point, penalty_dist)
-                            continue
-
-                        if args.insert_matrix_gaps and pr_ab_matrix_path:
-                            blank_sequences_in_partition(formatted_seq_path, part['PARTITION_NUM'], pr_ab_matrix_path)
-
-                        o_sl, o_pn, o_gp = get_msa_params_from_raxml(formatted_seq_path)
-                        dist = opt_metric(part, o_sl, o_pn, o_gp)
-
-                        opt.tell(suggested_point, dist)
-
-                        if dist < best_dist:
-                            print(f"new best: {dist}!")
-                            best_dist = dist
-                            best_suggestion = suggested_point
-                            shutil.copy(formatted_seq_path, formatted_seq_path + "_bg")
-
-                        if dist < SIMULATION_OPT_STOP_THRESH:
-                            print(f"found dist below {SIMULATION_OPT_STOP_THRESH}, stopping...")
-                            break
-
-                    shutil.copy(formatted_seq_path + "_bg", formatted_seq_path)
-                    print(f"overall best suggestion: {best_suggestion}, {best_dist}")
-
-                    o_sl, o_pn, o_gp = get_msa_params_from_raxml(formatted_seq_path)
-                    dist = opt_metric(part, o_sl, o_pn, o_gp)
-                    print(f"{seq_len}/{o_sl}\n"
-                          f"{patterns}/{o_pn}\n"
-                          f"{gaps}/{o_gp}")
-                    print(f"{dist}")
-
-                    test_opt_results["o_sl"].append(o_sl)
-                    test_opt_results["o_pn"].append(o_pn)
-                    test_opt_results["o_gp"].append(o_gp)
-                    test_opt_results["dist"].append(dist)
-                    test_opt_results["seq_len"].append(seq_len)
-                    test_opt_results["patterns"].append(patterns)
-                    test_opt_results["gaps"].append(gaps)
-
-                part_length_dict[part["PARTITION_NUM"]] = o_sl
-
-            # Assemble MSAs
-            seq_part_path_tuples.sort(key=lambda x: x[1])
-            sorted_seq_paths = [x[0] for x in seq_part_path_tuples]
-            assembled_msa_path = assemble_sequences(sorted_seq_paths, out_dir=dl_tree_path, matrix_path=pr_ab_matrix_path)
-
-            if args.avoid_empty_sequences:
-                contains_empty_seqs = check_for_empty_sequences(assembled_msa_path)
-            else:
-                contains_empty_seqs = False
-
-            if contains_empty_seqs:
-                print(f"contains empty {i}")
-
-                if i < num_retries - 1:
-                    continue
-                else:
-                    backup_seq_part_path_tuples.sort(key=lambda x: x[1])
-                    sorted_seq_paths = [x[0] for x in backup_seq_part_path_tuples]
-                    assembled_msa_path = assemble_sequences(sorted_seq_paths, out_dir=dl_tree_path, matrix_path="")
-
-                    with open(os.path.join(dl_tree_path, "failed_to_insert_gaps"), "w+") as file:
-                        file.write("1\n")
-
-            # Rewrite partitions file according to simulated MSA
-            sim_parts = copy.deepcopy(partitions)
-            for key in part_length_dict:
-                for temp_part in sim_parts:
-                    if key == temp_part["PARTITION_NUM"]:
-                        temp_part["NUM_ALIGNMENT_SITES"] = part_length_dict[key]
-            write_partitions_file(os.path.dirname(assembled_msa_path), sim_parts, "sim_partitions.txt")
-
-            if args.weights:
-                o_sl, o_pn, o_gp = get_msa_params_from_raxml(assembled_msa_path)
-                dist = opt_metric2(rand_tree_data['OVERALL_NUM_ALIGNMENT_SITES'],
-                                   rand_tree_data['OVERALL_NUM_PATTERNS'],
-                                   rand_tree_data['OVERALL_GAPS'],
-                                   o_sl, o_pn, o_gp)
-                print(f"sites: {rand_tree_data['OVERALL_NUM_ALIGNMENT_SITES']}/{o_sl}\n"
-                      f"patterns: {rand_tree_data['OVERALL_NUM_PATTERNS']}/{o_pn}\n"
-                      f"gaps: {rand_tree_data['OVERALL_GAPS']}/{o_gp}")
-                print(f"dist: {dist}")
-
-            if args.weights == "control":
-                test_opt_results["o_sl"].append(o_sl)
-                test_opt_results["o_pn"].append(o_pn)
-                test_opt_results["o_gp"].append(o_gp)
-                test_opt_results["dist"].append(dist)
-                test_opt_results["seq_len"].append(rand_tree_data['OVERALL_NUM_ALIGNMENT_SITES'])
-                test_opt_results["patterns"].append(rand_tree_data['OVERALL_NUM_PATTERNS'])
-                test_opt_results["gaps"].append(rand_tree_data['OVERALL_GAPS'])
-
-
-            #TODO: remove if the --avoid-empty-sequences flag is reworked!
-            if not contains_empty_seqs:
-                break
-
-        except Exception as e:
-            print(e)
-            print(traceback.print_exc())
-            print("something went wrong!")
-            raise e
-
-            return {}, {}
-
-    if not args.weights:    # TODO: remember to remove this
-        return returned_results, returned_paths
-    elif args.weights == "control":
-        return returned_results, test_opt_results
-    else:
-        return returned_results, test_opt_results
+    return returned_results, returned_paths
 
 
 def get_archive_meta_data(archive_path):
@@ -2121,7 +2198,7 @@ def hopefully_somewhat_better_directory_crawl(root_path, db_object, add_new_file
         else:
             if "RAxML_bestTree" in file_path:
                 file_dict["BEST_TREE"] = current_path
-            elif ".raxml.bestTree" in file_path or "tree_best.newick" in file_path:
+            elif file_path.endswith(".raxml.bestTree") or "tree_best.newick" in file_path:
                 file_dict["BEST_TREE"] = current_path
             elif "RAxML_info" in file_path:
                 file_dict["INFO"] = current_path
@@ -2355,7 +2432,9 @@ def main(args_list, is_imported=True):
 
     db_path = args.db_name if args.db_name else DEFAULT_DB_FILE_PATH
     db_object = BetterTreeDataBase(db_path, force_rewrite=args.force_rewrite)
-    meta_info_dict = {}
+    meta_info_dict = {
+        "COMMIT_HASH": ""
+    }
 
     # We return found data sets / data sets which were used for the generation of MSAs, in case main() is called
     # directly. returned_paths contains the directory paths the data sets were downloaded to.
@@ -2380,7 +2459,8 @@ def main(args_list, is_imported=True):
     elif args.operation == "execute":
         db_object.execute_command(args.command)
     elif args.operation == "find":
-        meta_info_dict = db_object.get_meta_info()
+        if not args.use_local_db:
+            meta_info_dict = db_object.get_meta_info()
         if args.rg_commit_hash:
             meta_info_dict["COMMIT_HASH"] = args.rg_commit_hash
 
@@ -2414,10 +2494,11 @@ def main(args_list, is_imported=True):
                     tree_dest_dir = args.out_dir or input('Destination (default cwd): ')
 
                     amount_to_download = input('How many trees to download (default all): ')
-                    returned_paths = download_trees(tree_dest_dir, result, meta_info_dict["COMMIT_HASH"],
-                                                    grouped_result,
+                    returned_paths = download_trees(tree_dest_dir, grouped_result, meta_info_dict["COMMIT_HASH"],
+                                                    keys=[],
                                                     amount=(
-                                                        int(amount_to_download) if amount_to_download else num_results))
+                                                        int(amount_to_download) if amount_to_download else num_results),
+                                                    source_dir=args.use_local_db)
                     """local_tree_copy(tree_dest_dir, result,
                                     amount=(int(amount_to_download) if amount_to_download else num_results))"""
         else:
@@ -2430,7 +2511,8 @@ def main(args_list, is_imported=True):
         returned_results = grouped_result
 
     elif args.operation == "generate" or args.operation == "justgimmeatree":
-        meta_info_dict = db_object.get_meta_info()
+        if not args.use_local_db:
+            meta_info_dict = db_object.get_meta_info()
         if args.rg_commit_hash:
             meta_info_dict["COMMIT_HASH"] = args.rg_commit_hash  # TODO: warn if hash was present and is overwritten?
 
