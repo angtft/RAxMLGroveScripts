@@ -3,10 +3,9 @@ tools/genesis-0.24.0/build/*
 tools/dawg-1.2/examples/template_modified.dawg
 tools/dawg-1.2/build/*
 tools/Seq-Gen-1.3.4/source/seq-gen
-tools/SpartaABC/
+tools/SpartaABC
 debug*.db
 latest_all.db
-tb_dna.db
 out_seq
 out/*
 trees
