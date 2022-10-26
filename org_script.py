@@ -46,7 +46,7 @@ BASE_NODE_NAME = "taxon{}"
 
 # Columns to be present in the SQLite database (as lists of tuples of name and data type).
 META_COLUMNS = [
-    ("RG_VERSION", "CHAR(100)"), ("COMMIT_HASH", "CHAR(100)"), ("LINK", "CHAR(100)")
+    ("RG_VERSION", "CHAR(100)"), ("COMMIT_HASH", "CHAR(100)"), ("URL", "CHAR(100)")
 ]
 
 COLUMNS = [
@@ -79,7 +79,10 @@ SUBSTITUTION_MODELS = {
     # "USERDEFINED": ""     # TODO
 }
 
-BASE_GITHUB_LINK = "https://raw.githubusercontent.com/angtft/RAxMLGrove/{}/trees/{}/{}"  # c6ec6f73eedc42b20a08707060a2782d0b515599 hash of RG v0.2 commit
+BASE_GITHUB_LINK = "https://github.com/{}/{}/raw/{}/trees/{}/{}"  # c6ec6f73eedc42b20a08707060a2782d0b515599 hash of RG v0.2 commit
+BASE_GITHUB_REPO_NAME = "RAxMLGrove"
+BASE_GITHUB_REPO_OWNER = "angtft"
+
 BASE_DB_FILE_NAME = "latest.db"
 BASE_FILE_DIR = os.path.dirname(os.path.abspath(__file__))
 BASE_OUT_DIR = os.path.join(BASE_FILE_DIR, "out")
@@ -238,28 +241,6 @@ def find_unused_tree_folder_name(root_dir_path, name):
             return suggested_name
         else:
             counter += 1
-
-
-def local_tree_copy(dest_dir, results, amount=1):
-    """
-    @deprecated
-    Copies a data set from a local archive to a destination
-    @param dest_dir: directory path to copy the data set to
-    @param results: results list as returned by db.find()
-    @param amount: number of data sets to be copied from the results list
-    @return:
-    """
-    if type(results) is list:
-        tree_pile = results
-    else:
-        tree_pile = [results]
-    try:
-        for i in range(amount):
-            dct = tree_pile[i]
-            tree_path = dct["TREE_ID"]  # TREE_ID should contain the absolute path
-            copy_tree_file(tree_path, os.path.join(dest_dir, BASE_TREE_NAME.format(i, BASE_TREE_FORMAT)))
-    except Exception as e:
-        print("Error in local_tree_copy: {}".format(e))
 
 
 class Dawg(object):
@@ -1339,12 +1320,20 @@ def write_partitions_file(dir_path, partition_results, file_name=""):
             file.write(line)
 
 
-def download_trees(dest_path, grouped_result, commit_hash, keys=[], amount=0, forced_out_dir="", source_dir=""):
+def get_repo_info_from_url(url):
+    repo_dir = os.path.dirname(url)
+    repo_name = ".".join(os.path.basename(url).split(".")[:-1])
+    repo_owner = os.path.basename(repo_dir)
+
+    return repo_owner, repo_name
+
+
+def download_trees(dest_path, grouped_result, meta_info_dict, keys=[], amount=0, forced_out_dir="", source_dir=""):
     """
     Downloads a data set from GitHub, also can save the tree dict (result) in the destination directory
     @param dest_path: destination directory path
     @param grouped_result: may be passed if the tree dict is to be saved as well
-    @param commit_hash: commit hash of the RG repo (since the tree ids might change between different RG versions)
+    @param meta_info_dict: meta information about the repository to download the datasets from
     @param keys: if set, will use the tree ids in that list to download trees (instead of iterating over keys in
                  grouped_results)
     @param amount: amount of data sets to download (if result dict > amount)
@@ -1352,6 +1341,8 @@ def download_trees(dest_path, grouped_result, commit_hash, keys=[], amount=0, fo
     @param source_dir: database directory, in case a local source is used
     @return: list of paths to the downloaded data sets
     """
+
+    commit_hash = meta_info_dict["COMMIT_HASH"]
 
     returned_paths = []
     tree_keys = keys if keys else list(grouped_result.keys())
@@ -1365,7 +1356,8 @@ def download_trees(dest_path, grouped_result, commit_hash, keys=[], amount=0, fo
             dir_path = os.path.join(dest_path, tree_id) if not forced_out_dir else os.path.join(dest_path,
                                                                                                 forced_out_dir)
             possible_files = [
-                "tree_best.newick", "tree_part.newick", "log_0.txt", "model_0.txt", "iqt.pr_ab_matrix", "msa.fasta"
+                "tree_best.newick", "tree_part.newick", "log_0.txt", "model_0.txt", "iqt.pr_ab_matrix", "msa.fasta",
+                f"{tree_id}.tar.gz"
             ]
             create_dir_if_needed(dir_path)
             if grouped_result:
@@ -1377,9 +1369,15 @@ def download_trees(dest_path, grouped_result, commit_hash, keys=[], amount=0, fo
             if not source_dir:
                 for file_name in possible_files:
                     try:
-                        with urlopen(BASE_GITHUB_LINK.format(commit_hash, tree_id, file_name)) as webpage:
-                            content = webpage.read().decode()
-                        with open(os.path.join(dir_path, file_name), "w+") as output:
+                        if "URL" in meta_info_dict:
+                            repo_owner, repo_name = get_repo_info_from_url(meta_info_dict["URL"])
+                            link = BASE_GITHUB_LINK.format(repo_owner, repo_name, commit_hash, tree_id, file_name)
+                        else:
+                            link = BASE_GITHUB_LINK.format(BASE_GITHUB_REPO_OWNER, BASE_GITHUB_REPO_NAME,
+                                                           commit_hash, tree_id, file_name)
+                        with urlopen(link) as webpage:
+                            content = webpage.read()
+                        with open(os.path.join(dir_path, file_name), "wb+") as output:
                             output.write(content)
                     except Exception as e:
                         pass
@@ -2036,7 +2034,7 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
         dl_tree_path = os.path.join(out_dir, forced_out_dir)
 
     # TODO: currently only one data set is downloaded, maybe change it again in future
-    returned_paths.extend(download_trees(out_dir, grouped_results, meta_info_dict["COMMIT_HASH"],
+    returned_paths.extend(download_trees(out_dir, grouped_results, meta_info_dict,
                                          keys=[rand_key],
                                          amount=1, forced_out_dir=tree_dir_name,
                                          source_dir=args.use_local_db))
@@ -2148,8 +2146,10 @@ def get_archive_meta_data(archive_path):
         import git  # GitPython import here, as we use it for this functionality only
         repo = git.Repo(archive_path, search_parent_directories=True)
         commit_hash = repo.head.object.hexsha
+        url = repo.remotes[0].config_reader.get("url")
 
         meta_dict["COMMIT_HASH"] = commit_hash
+        meta_dict["URL"] = url
         print(commit_hash)
     except Exception as e:
         print("WARNING: the script was unable to get the current commit hash of the RG repository (supplied with -a).\n"
@@ -2190,10 +2190,14 @@ def hopefully_somewhat_better_directory_crawl(root_path, db_object, add_new_file
     file_dict = {}
     is_rax_ng = False
 
+    dir_counter = 0
     for file_path in files:
         current_path = os.path.join(root_path, file_path)
 
         if os.path.isdir(current_path):
+            """dir_counter += 1
+            if dir_counter > 100:
+                return"""
             hopefully_somewhat_better_directory_crawl(current_path, db_object, add_new_files_only, local)
         else:
             if "RAxML_bestTree" in file_path:
@@ -2494,13 +2498,11 @@ def main(args_list, is_imported=True):
                     tree_dest_dir = args.out_dir or input('Destination (default cwd): ')
 
                     amount_to_download = input('How many trees to download (default all): ')
-                    returned_paths = download_trees(tree_dest_dir, grouped_result, meta_info_dict["COMMIT_HASH"],
+                    returned_paths = download_trees(tree_dest_dir, grouped_result, meta_info_dict,
                                                     keys=[],
                                                     amount=(
                                                         int(amount_to_download) if amount_to_download else num_results),
                                                     source_dir=args.use_local_db)
-                    """local_tree_copy(tree_dest_dir, result,
-                                    amount=(int(amount_to_download) if amount_to_download else num_results))"""
         else:
             if not is_imported:
                 for dct in result:
