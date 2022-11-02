@@ -104,7 +104,7 @@ SIMULATION_TIMEOUT = 20         # after this number of seconds, the MSA simulati
 SIMULATION_OPT_STOP_THRESH = 0.01
 SPARTA_BURNIN_NUM = 1000       # default values 10k/100k (burn-in/sim)
 SPARTA_SIM_NUM = 10000
-EXTENDED_SPARTA_SIM_NUM = 10   # default 100
+EXTENDED_SPARTA_SIM_NUM = 100   # default 100
 BONK_SIM_NUM = 100
 
 BIG_NUMBER = sys.maxsize
