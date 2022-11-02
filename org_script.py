@@ -104,7 +104,7 @@ SIMULATION_TIMEOUT = 20         # after this number of seconds, the MSA simulati
 SIMULATION_OPT_STOP_THRESH = 0.01
 SPARTA_BURNIN_NUM = 1000       # default values 10k/100k (burn-in/sim)
 SPARTA_SIM_NUM = 10000
-EXTENDED_SPARTA_SIM_NUM = 100   # default 100
+EXTENDED_SPARTA_SIM_NUM = 10   # default 100
 BONK_SIM_NUM = 100
 
 BIG_NUMBER = sys.maxsize
@@ -1958,7 +1958,7 @@ def simulate_msa_with_extended_sparta(part_dict, msa_path, tree_path, msa_out_pa
     weights = []
     sequences = msa_parser.parse_and_fix_msa_somehow(msa_path, part_dict["DATA_TYPE"])
     evaluator = SimMSAEval.using_sequences(part_dict, tree_path, msa_out_path, sequences, weights=weights,
-                                      distance_class=sparta_util.SpartaDist, generator=generator)
+                                      distance_class=sparta_util.ExtendedSpartaDist, generator=generator)
     gp_res = gp_minimize(evaluator.evaluate, search_space, n_calls=num_rounds)
 
     print(f"orig: {get_msa_params_from_raxml(msa_path)}")
