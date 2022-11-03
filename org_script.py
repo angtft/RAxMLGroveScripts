@@ -695,6 +695,7 @@ class BetterTreeDataBase(object):
             return meta_dict
         except Exception as e:
             print(f"Exception in get_meta_info: {e}")
+            return meta_info_dict
         return meta_info_dict
 
 
@@ -2117,6 +2118,12 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
         seq_part_path_tuples.sort(key=lambda x: x[1])
         sorted_seq_paths = [x[0] for x in seq_part_path_tuples]
         assemble_sequences(sorted_seq_paths, assembled_msa_path, matrix_path=pr_ab_matrix_path)
+
+        if args.avoid_empty_sequences:
+            if not check_for_empty_sequences(assembled_msa_path):
+                break
+        else:
+            break
 
     if args.avoid_empty_sequences:
         if check_for_empty_sequences(assembled_msa_path):
