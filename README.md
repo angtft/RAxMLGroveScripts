@@ -5,6 +5,8 @@ These are some example scripts using the [RAxMLGrove](https://github.com/angtft/
 Until we come up with a more clever solution (as GitHub only allows single files to be below 100 MB), the SQLite database 'latest.db' contains only the trees generated with RAxML8.
 The figures below were generated using that data only. The full database can be currently downloaded from [here](https://cme.h-its.org/exelixis/material/raxmlgrove/latest_all.db).
 
+The file 'tb_dna.db' can be used to access TreeBASE DNA datasets uploaded [here](https://github.com/angtft/TreeBASEMirror).
+
 ## Requirements
 The scripts use the following packages:
 - Biopython
