@@ -1,4 +1,6 @@
+#example1.dawg
 
+# An Ape Tree
 # branch lengths are the expected number of substitutions along that branch
 Tree   = (Hylobates:0.036079,(Pongo:0.033636,(Gorilla:0.017147, (Pan:0.019268,Homo:0.011927):0.008386):0.006124):0.015057);
 
@@ -22,3 +24,18 @@ Reps = 1
 File = "test1.fasta"
 Format = "Fasta"
 
+
+GapModel = {"NB", "NB"}
+GapParams =
+{
+    {1, 0.5}, #insertion model
+    {2, 0.5}  #deletion model
+}
+
+#GapModel = {"US"}
+#GapParams =
+#{
+#    0.7, #probability of an indel of size 1
+#    0.2, #probability of an indel of size 2
+#    0.1  #probability of an indel of size 3
+#}

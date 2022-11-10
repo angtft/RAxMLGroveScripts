@@ -258,7 +258,7 @@ class Dawg(object):
         self.template_path = os.path.join(self.path, "examples", "template.dawg")
         self.config_path = os.path.join(self.path, "examples", "template_modified.dawg")
         self.execute_path = os.path.join(self.path, "build", "src", "dawg")
-        if not os.path.isfile(self.execute_path):
+        if os.path.isdir(self.path) and not os.path.isfile(self.execute_path):
             self.__compile()
 
     def set_seed(self, seed):
@@ -280,10 +280,10 @@ class Dawg(object):
         out_dir = os.path.dirname(os.path.abspath(out_path))
         self.config_path = os.path.join(out_dir, "template_modified.dawg")
 
-        self.__configure(tree_path, tree_params, new_seq_len=new_seq_len, indel_rates=indel_rates)
+        self.__configure(tree_path, tree_params, new_seq_len=new_seq_len, indel_rates=indel_rates, out_path=out_path)
         try:
-            call = [self.execute_path, self.config_path, "-o", out_path]
-            subprocess.run(call, cwd=BASE_FILE_DIR, stdout=subprocess.DEVNULL, timeout=SIMULATION_TIMEOUT)
+            call = [self.execute_path, self.config_path]
+            subprocess.run(call, cwd=out_dir, stdout=subprocess.DEVNULL, timeout=SIMULATION_TIMEOUT)
         except subprocess.TimeoutExpired:
             print(f"Dawg.execute() timeout (after {SIMULATION_TIMEOUT}s)!")
             return 1
@@ -314,7 +314,7 @@ class Dawg(object):
             print(e)
         print("Done!")
 
-    def __configure(self, tree_path, tree_params, new_seq_len=0, indel_rates=()):
+    def __configure(self, tree_path, tree_params, new_seq_len=0, indel_rates=(), out_path=""):
         """
         Modifies a Dawg configuration file template with the information found in a tree dict and writes the modified
         version to config_path
@@ -345,17 +345,11 @@ class Dawg(object):
                                      + "}\n")
                 elif line.startswith("Model"):
                     out_lines.append('Model = "' + tree_params["MODEL"].split("+")[0] + '"\n')
+                elif out_path and line.startswith("File"):
+                    out_lines.append(f'File = "{os.path.basename(out_path)}"\n')
                 else:
                     out_lines.append(line)
             out_lines.append(f"\n{self.seed_line}\n")
-        if tree_params["GAPS"] != "None" and not indel_rates and False:   # TODO: deprecated!
-            """out_lines.append("GapModel = {'PL'}\n")
-            out_lines.append("GapParams = {"
-                             f"{tree_params['GAPS'] / 100}, 10"  # TODO: hardcoded value 10!
-                             "}\n")"""
-            out_lines.append("Lambda = {"
-                             f"{tree_params['GAPS'] / 100}"
-                             "}\n")
         if tree_params["ALPHA"] != "None":
             out_lines.append(f"Gamma = {tree_params['ALPHA']}\n")
         if indel_rates:
@@ -1263,6 +1257,8 @@ def init_args(arguments):
         args.use_local_db = os.path.abspath(args.use_local_db)
     if args.use_sparta and args.use_modified_sparta:
         parser.error("Mutually exclusive arguments used: --use-sparta and --use-modified-sparta")
+    if args.generator != "alisim" and (args.use_bonk or args.use_sparta or args.use_modified_sparta or args.indel):
+        parser.error("Indels are currently only usable with AliSim!")
 
     return args
 
