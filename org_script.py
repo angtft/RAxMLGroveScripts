@@ -243,7 +243,19 @@ def find_unused_tree_folder_name(root_dir_path, name):
             counter += 1
 
 
-class Dawg(object):
+class Simulator:
+    def __init__(self, path):
+        self.path = path
+        self.seed_line = ""
+
+    def set_seed(self, seed):
+        self.seed_line = seed
+
+    def execute(self, tree_path, out_path, tree_params, new_seq_len=0, indel_rates=(), indel_distr=(), indel_distr_params=(), timeout=0):
+        raise NotImplementedError()
+
+
+class Dawg(Simulator):
     """
     We use Dawg here (https://github.com/reedacartwright/dawg)
     """
@@ -252,8 +264,7 @@ class Dawg(object):
         """
         @param path: path to Dawg root folder
         """
-        self.path = path
-        self.seed_line = ""
+        super().__init__(path)
 
         self.template_path = os.path.join(self.path, "examples", "template.dawg")
         self.config_path = os.path.join(self.path, "examples", "template_modified.dawg")
@@ -269,7 +280,7 @@ class Dawg(object):
         """
         self.seed_line = f"Seed = {seed}"
 
-    def execute(self, tree_path, out_path, tree_params, new_seq_len=0, indel_rates=(), indel_distr=(), indel_distr_params=()):
+    def execute(self, tree_path, out_path, tree_params, new_seq_len=0, indel_rates=(), indel_distr=(), indel_distr_params=(), timeout=0):
         """
         Executes Dawg to generate MSAs
         @param tree_path: tree file path
@@ -283,7 +294,10 @@ class Dawg(object):
         self.__configure(tree_path, tree_params, new_seq_len=new_seq_len, indel_rates=indel_rates, out_path=out_path)
         try:
             call = [self.execute_path, self.config_path]
-            subprocess.run(call, cwd=out_dir, stdout=subprocess.DEVNULL, timeout=SIMULATION_TIMEOUT)
+            if timeout:
+                subprocess.run(call, cwd=out_dir, stdout=subprocess.DEVNULL, timeout=timeout)
+            else:
+                subprocess.run(call, cwd=out_dir, stdout=subprocess.DEVNULL)
         except subprocess.TimeoutExpired:
             print(f"Dawg.execute() timeout (after {SIMULATION_TIMEOUT}s)!")
             return 1
@@ -361,7 +375,7 @@ class Dawg(object):
             config_file.write("".join(out_lines))
 
 
-class SeqGen(object):
+class SeqGen(Simulator):
     """
     We also use Seq-Gen here (https://github.com/rambaut/Seq-Gen)
     """
@@ -370,6 +384,7 @@ class SeqGen(object):
         """
         @param path: path to Seq-Gen base directory
         """
+        super().__init__(path)
         self.path = path
         self.seed = -1
         self.execute_path = os.path.join(self.path, "source", "seq-gen")
@@ -384,7 +399,7 @@ class SeqGen(object):
         """
         self.seed = seed
 
-    def execute(self, tree_path, out_path, tree_params, num_of_sequence=0):
+    def execute(self, tree_path, out_path, tree_params, new_seq_len=0, indel_rates=(), indel_distr=(), indel_distr_params=()):
         """
         @deprecated
         Executes Seq-Gen to generate MSA files
@@ -437,7 +452,7 @@ class SeqGen(object):
         print("Done!")
 
 
-class AliSim(object):
+class AliSim(Simulator):
     """
     We use the AliSim here, which is now part of IQ-TREE2 (see https://github.com/iqtree/iqtree2/wiki/AliSim)
     """
@@ -446,8 +461,7 @@ class AliSim(object):
         """
         @param path: path to IQ-TREE2 root folder
         """
-        self.path = path
-        self.seed_line = ""
+        super().__init__(path)
         self.execute_path = os.path.join(self.path, "bin", "iqtree2")
 
     def set_seed(self, seed):
@@ -888,6 +902,52 @@ class OldRaxmlReader(object):
         self.__read()
         self.__fill_model_info()
 
+    def __parse_known_args(self, command_line):
+        parser = argparse.ArgumentParser()
+        parser.add_argument("-m")
+        parser.add_argument("-A")
+        parser.add_argument("-b")
+        parser.add_argument("-B")
+        parser.add_argument("-c")
+        parser.add_argument("-C", action='store_true')
+        parser.add_argument("-d", action='store_true')
+        parser.add_argument("-D", action='store_true')
+        parser.add_argument("-e")
+        parser.add_argument("-f")
+        parser.add_argument("-F", action='store_true')
+        parser.add_argument("-G")
+        parser.add_argument("-H", action='store_true')
+        parser.add_argument("-i")
+        parser.add_argument("-I")
+        parser.add_argument("-j", action='store_true')
+        parser.add_argument("-J")
+        parser.add_argument("-k", action='store_true')
+        parser.add_argument("-K", action='store_true')
+        parser.add_argument("-L")
+        parser.add_argument("-M", action='store_true')
+        parser.add_argument("-O", action='store_true')
+        parser.add_argument("-p")
+        parser.add_argument("-P")
+        parser.add_argument("-T")
+        parser.add_argument("-u", action='store_true')
+        parser.add_argument("-U", action='store_true')
+        parser.add_argument("-v", action='store_true')
+        parser.add_argument("-V", action='store_true')
+        parser.add_argument("-W")
+        parser.add_argument("-x")
+        parser.add_argument("-X", action='store_true')
+        parser.add_argument("-y", action='store_true')
+        parser.add_argument("-#")
+        parser.add_argument("-N")
+
+        args = None
+        try:
+            args, _ = parser.parse_known_args(command_line.split()[1:])
+        except Exception as e:
+            print(f"Exception in __parse_known_args: {e}")
+            print(traceback.print_exc())
+        return args
+
     def __read(self):
         """
         Very big function to read all the different parameters listed in a log file and write them to the object's
@@ -918,6 +978,7 @@ class OldRaxmlReader(object):
             current_freqs = []
             alphas = []  # TODO: currently we only take one assignment of alphas and rates, even if
             rates = []  # multiple searches were performed
+            command_line = ""
 
             for line in file:
                 line = line.rstrip()
@@ -985,6 +1046,9 @@ class OldRaxmlReader(object):
                     value = float(get_value(line))
                     temp_part_dict["ALPHA"].append(value)
 
+                if line.startswith("raxml"):
+                    command_line = line
+
                 if line.startswith("rate "):
                     value = float(get_value(line))
                     current_rates.append(value)
@@ -1042,6 +1106,8 @@ class OldRaxmlReader(object):
 
             if num_partitions == 1:
                 temp_part_dict["NUM_ALIGNMENT_SITES"] = [overall_num_sites]
+                parsed_args = self.__parse_known_args(command_line)
+                temp_part_dict["MODEL"] = [parsed_args.m]
 
             for i in range(num_partitions):
                 new_part = {}
@@ -1146,7 +1212,8 @@ def init_args(arguments):
 
     parser = argparse.ArgumentParser()
     parser.add_argument("operation",
-                        choices=["create", "add", "execute", "find", "generate", "stats", "justgimmeatree"],
+                        choices=["create", "add", "execute", "find", "generate", "stats", "justgimmeatree",
+                                 "download"],
                         # TODO: rework 'find' command?
                         help="'create' iterates over a RAxML out files archive parametrized with '-a' and "
                              "writes a database (db) file (the name can be parametrized with '-n'). Default db name "
@@ -1154,6 +1221,8 @@ def init_args(arguments):
                              "'add' adds trees from archive path to the db.\n"
                              "'execute' executes a command parametrized with '-c' on the db.\n"
                              "'find' tries to find trees in the db satisfying the conditions set with '-q'.\n"
+                             "'download' downloads all the trees returned by the '-q' query to the directory "
+                                 "specified with '-o' without asking questions.\n"
                              "'generate' generates simulated MSAs using randomly drawn trees from the db.\n"
                              "'stats' prints some statistical information about the database entries.")
     parser.add_argument("-n", "--db-name", help=f"Sets the name of the database file. If not set, this tool will "
@@ -2515,6 +2584,20 @@ def main(args_list, is_imported=True):
 
         returned_results = grouped_result
 
+    elif args.operation == "download":
+        if not args.use_local_db:
+            meta_info_dict = db_object.get_meta_info()
+        if args.rg_commit_hash:
+            meta_info_dict["COMMIT_HASH"] = args.rg_commit_hash
+
+        result = db_object.find(
+            f"SELECT * FROM TREE t INNER JOIN PARTITION p ON t.TREE_ID = p.PARENT_ID WHERE {args.query};")
+        grouped_result = group_partitions_in_result_dicts(result)
+        grouped_result = filter_incomplete_groups(grouped_result)
+
+        returned_paths = download_trees(args.out_dir, grouped_result, meta_info_dict,
+                                        amount=len(grouped_result), source_dir=args.use_local_db)
+
     elif args.operation == "generate" or args.operation == "justgimmeatree":
         if not args.use_local_db:
             meta_info_dict = db_object.get_meta_info()
@@ -2522,9 +2605,9 @@ def main(args_list, is_imported=True):
             meta_info_dict["COMMIT_HASH"] = args.rg_commit_hash  # TODO: warn if hash was present and is overwritten?
 
         if not args.filter_outliers:
-            query = args.query if args.query else "MODEL LIKE 'GTR%' AND RATE_AC AND FREQ_A AND OVERALL_NUM_ALIGNMENT_SITES > 0"  # TODO: expand possible models
+            query = args.query if args.query else "OVERALL_NUM_ALIGNMENT_SITES > 0"  # TODO: expand possible models
             results = db_object.find(
-                f"{BASE_SQL_FIND_COMMAND} WHERE MODEL LIKE 'GTR%' AND RATE_AC AND FREQ_A AND OVERALL_NUM_ALIGNMENT_SITES > 0 AND {query};")
+                f"{BASE_SQL_FIND_COMMAND} WHERE OVERALL_NUM_ALIGNMENT_SITES > 0 AND {query};")
         else:
             # Categories we currently filter outliers for
             categories = {  # TODO: make this work for AA (and all the other stuff)
@@ -2559,7 +2642,7 @@ def main(args_list, is_imported=True):
             else:
                 query = " AND ".join(filter_list)
             results = db_object.find(
-                f"{BASE_SQL_FIND_COMMAND} WHERE MODEL LIKE 'GTR%' AND RATE_AC AND FREQ_A AND OVERALL_NUM_ALIGNMENT_SITES > 0 AND {query};")
+                f"{BASE_SQL_FIND_COMMAND} WHERE OVERALL_NUM_ALIGNMENT_SITES > 0 AND {query};")
 
         grouped_results = group_partitions_in_result_dicts(results)
         grouped_results = filter_incomplete_groups(grouped_results)
