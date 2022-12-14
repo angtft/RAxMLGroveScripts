@@ -82,3 +82,11 @@ For more information please refer to the [wiki](https://github.com/angtft/RAxMLG
 For the figures below we filtered the outliers for each of the displayed columns using [Tukey's fences](https://en.wikipedia.org/wiki/Outlier#Tukey's_fences).
 
 <img src="./figures/test_NUM_TAXA.png" width="45%"></img><img src="./figures/test_TREE_DIAMETER.png" width="45%"></img><img src="./figures/test_TREE_LENGTH.png" width="45%"></img><img src="./figures/test_TREE_HEIGHT.png" width="45%"></img><img src="./figures/test_BRANCH_LENGTH_VARIANCE.png" width="45%"></img><img src="./figures/test_ALPHA.png" width="45%"></img><img src="./figures/test_NUM_ALIGNMENT_SITES.png" width="45%"></img><img src="./figures/test_GAPS.png" width="45%"></img><img src="./figures/test_RATE_AC.png" width="45%"></img><img src="./figures/test_RATE_AG.png" width="45%"></img><img src="./figures/test_RATE_AT.png" width="45%"></img><img src="./figures/test_RATE_CG.png" width="45%"></img><img src="./figures/test_RATE_CT.png" width="45%"></img><img src="./figures/test_FREQ_A.png" width="45%"></img><img src="./figures/test_FREQ_C.png" width="45%"></img><img src="./figures/test_FREQ_G.png" width="45%"></img><img src="./figures/test_FREQ_T.png" width="45%"></img>
+
+
+## Citation
+
+D. Höhler, W. Pfeiffer, V. Ioannidis, H. Stockinger, A. Stamatakis (2022)
+**RAxML Grove: an empirical phylogenetic tree database**
+*Bioinformatics*, 38(6):1741–1742.
+[https://doi.org/10.1093/bioinformatics/btab863](https://doi.org/10.1093/bioinformatics/btab863)
