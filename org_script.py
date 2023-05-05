@@ -53,16 +53,18 @@ COLUMNS = [
     ("TREE_ID", "CHAR(255)"), ("NUM_TAXA", "INT"), ("TREE_LENGTH", "FLOAT"), ("TREE_DIAMETER", "FLOAT"),
     ("TREE_HEIGHT", "FLOAT"), ("BRANCH_LENGTH_MEAN", "FLOAT"), ("BRANCH_LENGTH_VARIANCE", "FLOAT"),
     ("IS_INDELIBLE_COMPATIBLE", "INT"), ("OVERALL_NUM_ALIGNMENT_SITES", "INT"), ("OVERALL_NUM_PATTERNS", "INT"),
-    ("OVERALL_GAPS", "FLOAT"), ("INVARIANT_SITES", "FLOAT"), ("RAXML_NG", "INT"),
+    ("OVERALL_GAPS", "FLOAT"), ("RAXML_NG", "INT"),
     ("OVERALL_NUM_PARTITIONS", "INT"), ("MISSING_DATA_RATE", "FLOAT")
 ]
+
+# TODO: fix STATIONARY_FREQ_STR (database had two different entries THAT and FREQ_STR)
 
 PARTITION_COLUMNS = [
     ("MODEL", "CHAR(50)"), ("ALPHA", "FLOAT"), ("RATE_AC", "FLOAT"), ("RATE_AG", "FLOAT"), ("RATE_AT", "FLOAT"),
     ("RATE_CG", "FLOAT"), ("RATE_CT", "FLOAT"), ("RATE_GT", "FLOAT"), ("FREQ_A", "FLOAT"), ("FREQ_C", "FLOAT"),
     ("FREQ_G", "FLOAT"), ("FREQ_T", "FLOAT"), ("NUM_ALIGNMENT_SITES", "INT"), ("NUM_PATTERNS", "INT"),
     ("GAPS", "FLOAT"), ("INVARIANT_SITES", "FLOAT"), ("DATA_TYPE", "CHAR(50)"),
-    ("RATE_STR", "CHAR(5000)"), ("FREQ_STR", "CHAR(2000)"), ("PARTITION_NUM", "INT"),
+    ("RATE_STR", "CHAR(5000)"), ("PARTITION_NUM", "INT"),
     ("STATIONARY_FREQ_STR", "CHAR(100)"), ("PROPORTION_INVARIANT_SITES_STR", "CHAR(100)"),
     ("AMONG_SITE_RATE_HETEROGENEITY_STR", "CHAR(100)"), ("ASCERTAINMENT_BIAS_CORRECTION_STR", "CHAR(100)"),
     ("CUSTOM_CHAR_TO_STATE_MAPPING", "CHAR(100)"), ("PARENT_ID", "CHAR(255)")
@@ -280,7 +282,7 @@ class Dawg(Simulator):
         """
         self.seed_line = f"Seed = {seed}"
 
-    def execute(self, tree_path, out_path, tree_params, new_seq_len=0, indel_rates=(), indel_distr=(), indel_distr_params=(), timeout=0):
+    def execute(self, tree_path, out_path, tree_params, new_seq_len=0, indel_rates=(), indel_distr=(), indel_distr_params=(), timeout=SIMULATION_TIMEOUT):
         """
         Executes Dawg to generate MSAs
         @param tree_path: tree file path
@@ -467,24 +469,108 @@ class AliSim(Simulator):
     def set_seed(self, seed):
         self.seed_line = f"{seed}"
 
-    def execute(self, tree_path, out_path, tree_params, new_seq_len=0, indel_rates=(), indel_distr=(), indel_distr_params=()):
+    def replace_model_name(self, model):
+        models = [
+            "JC", "HKY", "GTR", "JTT", "LG", "BLOSUM62", "DAYHOFF"
+        ]
+        subs = {
+            "BLOSUM62": "Blosum62",
+            "PROTGTR": "GTR20",
+            "PROTGTRGAMMA": "GTR20"
+        }
+        for key in models:
+            if model.startswith("PROT"):
+                if model.endswith(key):
+                    if key in subs:
+                        return subs[key]
+                    return key
+            else:
+                if model.startswith(key):
+                    if key in subs:
+                        return subs[key]
+                    return key
+        return model
+
+    def fix_dna_rate_string(self, model, rate_str):
+        rate_str = rate_str.replace("{", "").replace("}", "")
+        rate_list = rate_str.split("/")
+        order = ["AC", "AG", "AT", "CG", "CT", "GT"]
+
+        mapping = {     # from https://github.com/ddarriba/modeltest/wiki/Models-of-Evolution
+            "JC": [],
+            "F81": [],
+            "K80": ["AC", "AG"],
+            "HKY": ["AC", "AG"],
+            "TrNef": ["AC", "AG", "CT"],
+            "TN93ef": ["AC", "AG", "CT"],
+            "TrN": ["AC", "AG", "CT"],
+            "TN93": ["AC", "AG", "CT"],
+            "TPM1": ["AC", "AG", "AT"],
+            "K81": ["AC", "AG", "AT"],
+            "TPM1uf": ["AC", "AG", "AT"],
+            "K81uf": ["AC", "AG", "AT"],
+            "TPM2": ["AC", "CG", "AG"],
+            "TPM2uf": ["AC", "CG", "AG"],
+            "TPM3": ["AC", "AG", "AT"],
+            "TPM3uf": ["AC", "AG", "AT"],
+            "TIM1": ["AC", "AT", "AG", "CT"],
+            "TIM1uf": ["AC", "AT", "AG", "CT"],
+            "TIM2": ["AC", "CG", "AG", "CT"],
+            "TIM2uf": ["AC", "CG", "AG", "CT"],
+            "TIM3": ["AC", "AT", "AG", "CT"],
+            "TIM3uf": ["AC", "AT", "AG", "CT"],
+            "TVMef": ["AC", "CG", "AT", "GT", "AG"],
+            "TMV": ["AC", "CG", "AT", "GT", "AG"],
+            "SYM": ["AC", "CG", "AT", "GT", "AG", "CT"],
+            "GTR": ["AC", "CG", "AT", "GT", "AG", "CT"],
+            "REV": ["AC", "CG", "AT", "GT", "AG", "CT"],
+        }
+
+        out_rates = []
+        for i, s in enumerate(order):
+            if s in mapping[model]:
+                out_rates.append(rate_list[i])
+        return out_rates
+
+    def execute(self, tree_path, out_path, tree_params, new_seq_len=0, indel_rates=(), indel_distr=(), indel_distr_params=(), timeout=SIMULATION_TIMEOUT):
         out_dir = os.path.dirname(os.path.abspath(out_path))
         file_name = os.path.basename(out_path)
 
         try:
-            if tree_params["MODEL"] != "GTR":
-                raise NotImplementedError("Only GTR model implemented for simulations right now :(")
+            #if tree_params["MODEL"] != "GTR":
+            #    raise NotImplementedError("Only GTR model implemented for simulations right now :(")
 
             if new_seq_len:
                 seq_len = new_seq_len
             else:
                 seq_len = tree_params["NUM_ALIGNMENT_SITES"]
 
+            """
             model_string = f'{tree_params["MODEL"]}' + "{" \
                            f'{tree_params["RATE_AC"]}/{tree_params["RATE_AG"]}/{tree_params["RATE_CG"]}/{tree_params["RATE_CT"]}/{tree_params["RATE_GT"]}' + "}" \
                            '+F{' + f'{tree_params["FREQ_A"]}/{tree_params["FREQ_C"]}/{tree_params["FREQ_G"]}/{tree_params["FREQ_T"]}' + '}'
+            """
+            freq_str = tree_params["FREQ_STR"].split("{")[1]
+            freq_str = freq_str.replace("{", "").replace("}", "")
+            rate_str = tree_params["RATE_STR"].split("{")[1]
+            rate_str = rate_str.replace("{", "").replace("}", "")
+
+            model = self.replace_model_name(tree_params['MODEL'])
+            if tree_params["DATA_TYPE"] == "DNA":
+                rate_str = "/".join(self.fix_dna_rate_string(model, rate_str))
+            elif tree_params["DATA_TYPE"] == "AA":
+                if model == "GTR":      # TODO: maybe handle these exceptions more gracefully...
+                    model = "GTR20"
+                    # remove the base 1.0 in the end since AliSim does not understand it for some reason (?)
+                    rate_str = "/".join(rate_str.split("/")[:-1])
+                pass
+            model_string = f"{model}{{{rate_str}}}" \
+                           f"+F{{{freq_str}}}"
+
             if tree_params["ALPHA"] != "None":
                 model_string += '+G{' + f'{tree_params["ALPHA"]}' + "}"
+            if tree_params["INVARIANT_SITES"] != "None":
+                model_string += "+I{" + f"{tree_params['INVARIANT_SITES']}" + "}"
 
             call = [
                 self.execute_path,
@@ -512,9 +598,9 @@ class AliSim(Simulator):
                     "--seed", self.seed_line
                 ])
 
-            subprocess.run(call, cwd=BASE_FILE_DIR, stdout=subprocess.DEVNULL, timeout=SIMULATION_TIMEOUT)
+            subprocess.run(call, cwd=BASE_FILE_DIR, stdout=subprocess.DEVNULL, timeout=timeout)
         except subprocess.TimeoutExpired:
-            print(f"AliSim.execute() timeout (after {SIMULATION_TIMEOUT}s)!")
+            print(f"AliSim.execute() timeout (after {timeout}s)!")
             return 1
         except Exception as e:
             print(e)
@@ -1140,7 +1226,7 @@ class OldRaxmlReader(object):
                         part["FREQ_T"] = part["BASE_FREQUENCIES"][3]
 
             if "BASE_FREQUENCIES" in part:
-                part["FREQ_STR"] = f"{{{'/'.join([str(x) for x in part['BASE_FREQUENCIES']])}}}"
+                part["STATIONARY_FREQ_STR"] = f"{{{'/'.join([str(x) for x in part['BASE_FREQUENCIES']])}}}"
 
     def get_partition_info(self):
         """
@@ -1368,8 +1454,8 @@ def save_tree_dict(path, result):
 
 
 def write_partitions_file(dir_path, partition_results, file_name=""):
-    if partition_results[0]["OVERALL_NUM_PARTITIONS"] == 1:
-        return
+    #if partition_results[0]["OVERALL_NUM_PARTITIONS"] == 1:
+    #    return
 
     sorted_parts = copy.deepcopy(partition_results)
     sorted_parts.sort(key=lambda x: int(x["PARTITION_NUM"]))
@@ -1380,7 +1466,12 @@ def write_partitions_file(dir_path, partition_results, file_name=""):
     with open(file_path, "w+") as file:
         current_site_num = 1
         for part in sorted_parts:
-            line = f"{part['DATA_TYPE']}, partition_{part['PARTITION_NUM']} = " \
+            model_str = part["MODEL"]
+            if part["ALPHA"] != "None":
+                model_str += "+G"
+            if part["INVARIANT_SITES"] != "None":
+                model_str += "+I"
+            line = f"{part['DATA_TYPE']}, {model_str}, partition_{part['PARTITION_NUM']} = " \
                    f"{current_site_num}-{current_site_num + int(part['NUM_ALIGNMENT_SITES']) - 1}\n"
             current_site_num += int(part["NUM_ALIGNMENT_SITES"])
             file.write(line)
@@ -1833,7 +1924,12 @@ def get_msa_params_from_raxml(msa_path):
         "--prefix", prefix,
         "--redo"
     ]
-    subprocess.check_output(command, cwd=msa_dir)
+    try:
+        subprocess.check_output(command, cwd=msa_dir)
+    except Exception as e:  # TODO: fix this (set model correctly for --parse)
+        print(f"RAxML-NG parsing did not work!\n"
+              f"{e}")
+        return -1, -1, -1
     raxml_log_path = os.path.join(msa_dir, f"{prefix}.raxml.log")
 
     sl = pn = gp = 0
@@ -2094,7 +2190,10 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
     # Download tree
     tree_dir_name = forced_out_dir
     if not forced_out_dir:
-        tree_dir_name = find_unused_tree_folder_name(out_dir, rand_tree_data["TREE_ID"])
+        if not args.force_rewrite:
+            tree_dir_name = find_unused_tree_folder_name(out_dir, rand_tree_data["TREE_ID"])
+        else:
+            tree_dir_name = os.path.join(out_dir, rand_tree_data["TREE_ID"])
         dl_tree_path = os.path.join(out_dir, tree_dir_name)
     else:
         dl_tree_path = os.path.join(out_dir, forced_out_dir)
@@ -2117,6 +2216,8 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
 
     assembled_msa_path = os.path.join(dl_tree_path, "assembled_sequences.fasta")
     backup_seq_part_path_tuples = []
+    sorted_seq_paths = []
+
     if args.avoid_empty_sequences:
         num_retries = 3
     for i in range(num_retries):
@@ -2152,7 +2253,7 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
             formatted_seq_path = final_alignment_path.format(seq_part_path)
 
             # generate an MSA in any case without weights in a "dry run", even if we reoptimize later
-            generator.execute(tree_path, seq_part_path, part)
+            generator.execute(tree_path, seq_part_path, part, timeout=SIMULATION_TIMEOUT)
             seq_part_path_tuples.append((formatted_seq_path, current_part_num))
 
             # TODO: this should be (maybe) reworked eventually!
@@ -2177,7 +2278,7 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
             elif args.use_bonk or args.weights:
                 simulate_msa_with_bonk(part, tree_path, seq_part_path, generator, matrix_path=pr_ab_matrix_path)
             else:
-                generator.execute(tree_path, seq_part_path, part)
+                generator.execute(tree_path, seq_part_path, part, timeout=SIMULATION_TIMEOUT)
 
         # Assemble MSAs
         seq_part_path_tuples.sort(key=lambda x: x[1])
@@ -2198,6 +2299,20 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
 
             with open(os.path.join(dl_tree_path, "failed_to_insert_gaps"), "w+") as file:
                 file.write("1\n")
+
+    final_part_list = []
+    part_id_map = {}
+    for part in grouped_results[rand_key]:
+        part_id_map[int(part["PARTITION_NUM"])] = part
+
+    for i, seq_path in enumerate(sorted_seq_paths):
+        seqs = msa_parser.parse_msa_somehow(seq_path)
+        msa_len = len(seqs[0].sequence)
+        part_dct = copy.deepcopy(part_id_map[i])
+        part_dct["NUM_ALIGNMENT_SITES"] = msa_len
+        final_part_list.append(part_dct)
+
+    write_partitions_file(dl_tree_path, final_part_list, "sim_partitions.txt")
 
     return returned_results, returned_paths
 
@@ -2507,7 +2622,9 @@ def main(args_list, is_imported=True):
     args = init_args(args_list)
 
     db_path = args.db_name if args.db_name else DEFAULT_DB_FILE_PATH
-    db_object = BetterTreeDataBase(db_path, force_rewrite=args.force_rewrite)
+
+    force_rewrite = True if args.operation == "create" and args.force_rewrite else False
+    db_object = BetterTreeDataBase(db_path, force_rewrite=force_rewrite)
     meta_info_dict = {
         "COMMIT_HASH": ""
     }
