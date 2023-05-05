@@ -53,16 +53,18 @@ COLUMNS = [
     ("TREE_ID", "CHAR(255)"), ("NUM_TAXA", "INT"), ("TREE_LENGTH", "FLOAT"), ("TREE_DIAMETER", "FLOAT"),
     ("TREE_HEIGHT", "FLOAT"), ("BRANCH_LENGTH_MEAN", "FLOAT"), ("BRANCH_LENGTH_VARIANCE", "FLOAT"),
     ("IS_INDELIBLE_COMPATIBLE", "INT"), ("OVERALL_NUM_ALIGNMENT_SITES", "INT"), ("OVERALL_NUM_PATTERNS", "INT"),
-    ("OVERALL_GAPS", "FLOAT"), ("INVARIANT_SITES", "FLOAT"), ("RAXML_NG", "INT"),
+    ("OVERALL_GAPS", "FLOAT"), ("RAXML_NG", "INT"),
     ("OVERALL_NUM_PARTITIONS", "INT"), ("MISSING_DATA_RATE", "FLOAT")
 ]
+
+# TODO: fix STATIONARY_FREQ_STR (database had two different entries THAT and FREQ_STR)
 
 PARTITION_COLUMNS = [
     ("MODEL", "CHAR(50)"), ("ALPHA", "FLOAT"), ("RATE_AC", "FLOAT"), ("RATE_AG", "FLOAT"), ("RATE_AT", "FLOAT"),
     ("RATE_CG", "FLOAT"), ("RATE_CT", "FLOAT"), ("RATE_GT", "FLOAT"), ("FREQ_A", "FLOAT"), ("FREQ_C", "FLOAT"),
     ("FREQ_G", "FLOAT"), ("FREQ_T", "FLOAT"), ("NUM_ALIGNMENT_SITES", "INT"), ("NUM_PATTERNS", "INT"),
     ("GAPS", "FLOAT"), ("INVARIANT_SITES", "FLOAT"), ("DATA_TYPE", "CHAR(50)"),
-    ("RATE_STR", "CHAR(5000)"), ("FREQ_STR", "CHAR(2000)"), ("PARTITION_NUM", "INT"),
+    ("RATE_STR", "CHAR(5000)"), ("PARTITION_NUM", "INT"),
     ("STATIONARY_FREQ_STR", "CHAR(100)"), ("PROPORTION_INVARIANT_SITES_STR", "CHAR(100)"),
     ("AMONG_SITE_RATE_HETEROGENEITY_STR", "CHAR(100)"), ("ASCERTAINMENT_BIAS_CORRECTION_STR", "CHAR(100)"),
     ("CUSTOM_CHAR_TO_STATE_MAPPING", "CHAR(100)"), ("PARENT_ID", "CHAR(255)")
@@ -243,7 +245,19 @@ def find_unused_tree_folder_name(root_dir_path, name):
             counter += 1
 
 
-class Dawg(object):
+class Simulator:
+    def __init__(self, path):
+        self.path = path
+        self.seed_line = ""
+
+    def set_seed(self, seed):
+        self.seed_line = seed
+
+    def execute(self, tree_path, out_path, tree_params, new_seq_len=0, indel_rates=(), indel_distr=(), indel_distr_params=(), timeout=0):
+        raise NotImplementedError()
+
+
+class Dawg(Simulator):
     """
     We use Dawg here (https://github.com/reedacartwright/dawg)
     """
@@ -252,8 +266,7 @@ class Dawg(object):
         """
         @param path: path to Dawg root folder
         """
-        self.path = path
-        self.seed_line = ""
+        super().__init__(path)
 
         self.template_path = os.path.join(self.path, "examples", "template.dawg")
         self.config_path = os.path.join(self.path, "examples", "template_modified.dawg")
@@ -269,7 +282,7 @@ class Dawg(object):
         """
         self.seed_line = f"Seed = {seed}"
 
-    def execute(self, tree_path, out_path, tree_params, new_seq_len=0, indel_rates=(), indel_distr=(), indel_distr_params=()):
+    def execute(self, tree_path, out_path, tree_params, new_seq_len=0, indel_rates=(), indel_distr=(), indel_distr_params=(), timeout=SIMULATION_TIMEOUT):
         """
         Executes Dawg to generate MSAs
         @param tree_path: tree file path
@@ -283,7 +296,10 @@ class Dawg(object):
         self.__configure(tree_path, tree_params, new_seq_len=new_seq_len, indel_rates=indel_rates, out_path=out_path)
         try:
             call = [self.execute_path, self.config_path]
-            subprocess.run(call, cwd=out_dir, stdout=subprocess.DEVNULL, timeout=SIMULATION_TIMEOUT)
+            if timeout:
+                subprocess.run(call, cwd=out_dir, stdout=subprocess.DEVNULL, timeout=timeout)
+            else:
+                subprocess.run(call, cwd=out_dir, stdout=subprocess.DEVNULL)
         except subprocess.TimeoutExpired:
             print(f"Dawg.execute() timeout (after {SIMULATION_TIMEOUT}s)!")
             return 1
@@ -361,7 +377,7 @@ class Dawg(object):
             config_file.write("".join(out_lines))
 
 
-class SeqGen(object):
+class SeqGen(Simulator):
     """
     We also use Seq-Gen here (https://github.com/rambaut/Seq-Gen)
     """
@@ -370,6 +386,7 @@ class SeqGen(object):
         """
         @param path: path to Seq-Gen base directory
         """
+        super().__init__(path)
         self.path = path
         self.seed = -1
         self.execute_path = os.path.join(self.path, "source", "seq-gen")
@@ -384,7 +401,7 @@ class SeqGen(object):
         """
         self.seed = seed
 
-    def execute(self, tree_path, out_path, tree_params, num_of_sequence=0):
+    def execute(self, tree_path, out_path, tree_params, new_seq_len=0, indel_rates=(), indel_distr=(), indel_distr_params=()):
         """
         @deprecated
         Executes Seq-Gen to generate MSA files
@@ -437,7 +454,7 @@ class SeqGen(object):
         print("Done!")
 
 
-class AliSim(object):
+class AliSim(Simulator):
     """
     We use the AliSim here, which is now part of IQ-TREE2 (see https://github.com/iqtree/iqtree2/wiki/AliSim)
     """
@@ -446,31 +463,114 @@ class AliSim(object):
         """
         @param path: path to IQ-TREE2 root folder
         """
-        self.path = path
-        self.seed_line = ""
+        super().__init__(path)
         self.execute_path = os.path.join(self.path, "bin", "iqtree2")
 
     def set_seed(self, seed):
         self.seed_line = f"{seed}"
 
-    def execute(self, tree_path, out_path, tree_params, new_seq_len=0, indel_rates=(), indel_distr=(), indel_distr_params=()):
+    def replace_model_name(self, model):
+        models = [
+            "JC", "HKY", "GTR", "JTT", "LG", "BLOSUM62", "DAYHOFF"
+        ]
+        subs = {
+            "BLOSUM62": "Blosum62",
+            "PROTGTR": "GTR20",
+            "PROTGTRGAMMA": "GTR20"
+        }
+        for key in models:
+            if model.startswith("PROT"):
+                if model.endswith(key):
+                    if key in subs:
+                        return subs[key]
+                    return key
+            else:
+                if model.startswith(key):
+                    if key in subs:
+                        return subs[key]
+                    return key
+        return model
+
+    def fix_dna_rate_string(self, model, rate_str):
+        rate_str = rate_str.replace("{", "").replace("}", "")
+        rate_list = rate_str.split("/")
+        order = ["AC", "AG", "AT", "CG", "CT", "GT"]
+
+        mapping = {     # from https://github.com/ddarriba/modeltest/wiki/Models-of-Evolution
+            "JC": [],
+            "F81": [],
+            "K80": ["AC", "AG"],
+            "HKY": ["AC", "AG"],
+            "TrNef": ["AC", "AG", "CT"],
+            "TN93ef": ["AC", "AG", "CT"],
+            "TrN": ["AC", "AG", "CT"],
+            "TN93": ["AC", "AG", "CT"],
+            "TPM1": ["AC", "AG", "AT"],
+            "K81": ["AC", "AG", "AT"],
+            "TPM1uf": ["AC", "AG", "AT"],
+            "K81uf": ["AC", "AG", "AT"],
+            "TPM2": ["AC", "CG", "AG"],
+            "TPM2uf": ["AC", "CG", "AG"],
+            "TPM3": ["AC", "AG", "AT"],
+            "TPM3uf": ["AC", "AG", "AT"],
+            "TIM1": ["AC", "AT", "AG", "CT"],
+            "TIM1uf": ["AC", "AT", "AG", "CT"],
+            "TIM2": ["AC", "CG", "AG", "CT"],
+            "TIM2uf": ["AC", "CG", "AG", "CT"],
+            "TIM3": ["AC", "AT", "AG", "CT"],
+            "TIM3uf": ["AC", "AT", "AG", "CT"],
+            "TVMef": ["AC", "CG", "AT", "GT", "AG"],
+            "TMV": ["AC", "CG", "AT", "GT", "AG"],
+            "SYM": ["AC", "CG", "AT", "GT", "AG", "CT"],
+            "GTR": ["AC", "CG", "AT", "GT", "AG", "CT"],
+            "REV": ["AC", "CG", "AT", "GT", "AG", "CT"],
+        }
+
+        out_rates = []
+        for i, s in enumerate(order):
+            if s in mapping[model]:
+                out_rates.append(rate_list[i])
+        return out_rates
+
+    def execute(self, tree_path, out_path, tree_params, new_seq_len=0, indel_rates=(), indel_distr=(), indel_distr_params=(), timeout=SIMULATION_TIMEOUT):
         out_dir = os.path.dirname(os.path.abspath(out_path))
         file_name = os.path.basename(out_path)
 
         try:
-            if tree_params["MODEL"] != "GTR":
-                raise NotImplementedError("Only GTR model implemented for simulations right now :(")
+            #if tree_params["MODEL"] != "GTR":
+            #    raise NotImplementedError("Only GTR model implemented for simulations right now :(")
 
             if new_seq_len:
                 seq_len = new_seq_len
             else:
                 seq_len = tree_params["NUM_ALIGNMENT_SITES"]
 
+            """
             model_string = f'{tree_params["MODEL"]}' + "{" \
                            f'{tree_params["RATE_AC"]}/{tree_params["RATE_AG"]}/{tree_params["RATE_CG"]}/{tree_params["RATE_CT"]}/{tree_params["RATE_GT"]}' + "}" \
                            '+F{' + f'{tree_params["FREQ_A"]}/{tree_params["FREQ_C"]}/{tree_params["FREQ_G"]}/{tree_params["FREQ_T"]}' + '}'
+            """
+            freq_str = tree_params["FREQ_STR"].split("{")[1]
+            freq_str = freq_str.replace("{", "").replace("}", "")
+            rate_str = tree_params["RATE_STR"].split("{")[1]
+            rate_str = rate_str.replace("{", "").replace("}", "")
+
+            model = self.replace_model_name(tree_params['MODEL'])
+            if tree_params["DATA_TYPE"] == "DNA":
+                rate_str = "/".join(self.fix_dna_rate_string(model, rate_str))
+            elif tree_params["DATA_TYPE"] == "AA":
+                if model == "GTR":      # TODO: maybe handle these exceptions more gracefully...
+                    model = "GTR20"
+                    # remove the base 1.0 in the end since AliSim does not understand it for some reason (?)
+                    rate_str = "/".join(rate_str.split("/")[:-1])
+                pass
+            model_string = f"{model}{{{rate_str}}}" \
+                           f"+F{{{freq_str}}}"
+
             if tree_params["ALPHA"] != "None":
                 model_string += '+G{' + f'{tree_params["ALPHA"]}' + "}"
+            if tree_params["INVARIANT_SITES"] != "None":
+                model_string += "+I{" + f"{tree_params['INVARIANT_SITES']}" + "}"
 
             call = [
                 self.execute_path,
@@ -498,9 +598,9 @@ class AliSim(object):
                     "--seed", self.seed_line
                 ])
 
-            subprocess.run(call, cwd=BASE_FILE_DIR, stdout=subprocess.DEVNULL, timeout=SIMULATION_TIMEOUT)
+            subprocess.run(call, cwd=BASE_FILE_DIR, stdout=subprocess.DEVNULL, timeout=timeout)
         except subprocess.TimeoutExpired:
-            print(f"AliSim.execute() timeout (after {SIMULATION_TIMEOUT}s)!")
+            print(f"AliSim.execute() timeout (after {timeout}s)!")
             return 1
         except Exception as e:
             print(e)
@@ -888,6 +988,52 @@ class OldRaxmlReader(object):
         self.__read()
         self.__fill_model_info()
 
+    def __parse_known_args(self, command_line):
+        parser = argparse.ArgumentParser()
+        parser.add_argument("-m")
+        parser.add_argument("-A")
+        parser.add_argument("-b")
+        parser.add_argument("-B")
+        parser.add_argument("-c")
+        parser.add_argument("-C", action='store_true')
+        parser.add_argument("-d", action='store_true')
+        parser.add_argument("-D", action='store_true')
+        parser.add_argument("-e")
+        parser.add_argument("-f")
+        parser.add_argument("-F", action='store_true')
+        parser.add_argument("-G")
+        parser.add_argument("-H", action='store_true')
+        parser.add_argument("-i")
+        parser.add_argument("-I")
+        parser.add_argument("-j", action='store_true')
+        parser.add_argument("-J")
+        parser.add_argument("-k", action='store_true')
+        parser.add_argument("-K", action='store_true')
+        parser.add_argument("-L")
+        parser.add_argument("-M", action='store_true')
+        parser.add_argument("-O", action='store_true')
+        parser.add_argument("-p")
+        parser.add_argument("-P")
+        parser.add_argument("-T")
+        parser.add_argument("-u", action='store_true')
+        parser.add_argument("-U", action='store_true')
+        parser.add_argument("-v", action='store_true')
+        parser.add_argument("-V", action='store_true')
+        parser.add_argument("-W")
+        parser.add_argument("-x")
+        parser.add_argument("-X", action='store_true')
+        parser.add_argument("-y", action='store_true')
+        parser.add_argument("-#")
+        parser.add_argument("-N")
+
+        args = None
+        try:
+            args, _ = parser.parse_known_args(command_line.split()[1:])
+        except Exception as e:
+            print(f"Exception in __parse_known_args: {e}")
+            print(traceback.print_exc())
+        return args
+
     def __read(self):
         """
         Very big function to read all the different parameters listed in a log file and write them to the object's
@@ -918,6 +1064,7 @@ class OldRaxmlReader(object):
             current_freqs = []
             alphas = []  # TODO: currently we only take one assignment of alphas and rates, even if
             rates = []  # multiple searches were performed
+            command_line = ""
 
             for line in file:
                 line = line.rstrip()
@@ -985,6 +1132,9 @@ class OldRaxmlReader(object):
                     value = float(get_value(line))
                     temp_part_dict["ALPHA"].append(value)
 
+                if line.startswith("raxml"):
+                    command_line = line
+
                 if line.startswith("rate "):
                     value = float(get_value(line))
                     current_rates.append(value)
@@ -1042,6 +1192,8 @@ class OldRaxmlReader(object):
 
             if num_partitions == 1:
                 temp_part_dict["NUM_ALIGNMENT_SITES"] = [overall_num_sites]
+                parsed_args = self.__parse_known_args(command_line)
+                temp_part_dict["MODEL"] = [parsed_args.m]
 
             for i in range(num_partitions):
                 new_part = {}
@@ -1074,7 +1226,7 @@ class OldRaxmlReader(object):
                         part["FREQ_T"] = part["BASE_FREQUENCIES"][3]
 
             if "BASE_FREQUENCIES" in part:
-                part["FREQ_STR"] = f"{{{'/'.join([str(x) for x in part['BASE_FREQUENCIES']])}}}"
+                part["STATIONARY_FREQ_STR"] = f"{{{'/'.join([str(x) for x in part['BASE_FREQUENCIES']])}}}"
 
     def get_partition_info(self):
         """
@@ -1146,7 +1298,8 @@ def init_args(arguments):
 
     parser = argparse.ArgumentParser()
     parser.add_argument("operation",
-                        choices=["create", "add", "execute", "find", "generate", "stats", "justgimmeatree"],
+                        choices=["create", "add", "execute", "find", "generate", "stats", "justgimmeatree",
+                                 "download"],
                         # TODO: rework 'find' command?
                         help="'create' iterates over a RAxML out files archive parametrized with '-a' and "
                              "writes a database (db) file (the name can be parametrized with '-n'). Default db name "
@@ -1154,6 +1307,8 @@ def init_args(arguments):
                              "'add' adds trees from archive path to the db.\n"
                              "'execute' executes a command parametrized with '-c' on the db.\n"
                              "'find' tries to find trees in the db satisfying the conditions set with '-q'.\n"
+                             "'download' downloads all the trees returned by the '-q' query to the directory "
+                                 "specified with '-o' without asking questions.\n"
                              "'generate' generates simulated MSAs using randomly drawn trees from the db.\n"
                              "'stats' prints some statistical information about the database entries.")
     parser.add_argument("-n", "--db-name", help=f"Sets the name of the database file. If not set, this tool will "
@@ -1299,8 +1454,8 @@ def save_tree_dict(path, result):
 
 
 def write_partitions_file(dir_path, partition_results, file_name=""):
-    if partition_results[0]["OVERALL_NUM_PARTITIONS"] == 1:
-        return
+    #if partition_results[0]["OVERALL_NUM_PARTITIONS"] == 1:
+    #    return
 
     sorted_parts = copy.deepcopy(partition_results)
     sorted_parts.sort(key=lambda x: int(x["PARTITION_NUM"]))
@@ -1311,7 +1466,12 @@ def write_partitions_file(dir_path, partition_results, file_name=""):
     with open(file_path, "w+") as file:
         current_site_num = 1
         for part in sorted_parts:
-            line = f"{part['DATA_TYPE']}, partition_{part['PARTITION_NUM']} = " \
+            model_str = part["MODEL"]
+            if part["ALPHA"] != "None":
+                model_str += "+G"
+            if part["INVARIANT_SITES"] != "None":
+                model_str += "+I"
+            line = f"{part['DATA_TYPE']}, {model_str}, partition_{part['PARTITION_NUM']} = " \
                    f"{current_site_num}-{current_site_num + int(part['NUM_ALIGNMENT_SITES']) - 1}\n"
             current_site_num += int(part["NUM_ALIGNMENT_SITES"])
             file.write(line)
@@ -1764,7 +1924,12 @@ def get_msa_params_from_raxml(msa_path):
         "--prefix", prefix,
         "--redo"
     ]
-    subprocess.check_output(command, cwd=msa_dir)
+    try:
+        subprocess.check_output(command, cwd=msa_dir)
+    except Exception as e:  # TODO: fix this (set model correctly for --parse)
+        print(f"RAxML-NG parsing did not work!\n"
+              f"{e}")
+        return -1, -1, -1
     raxml_log_path = os.path.join(msa_dir, f"{prefix}.raxml.log")
 
     sl = pn = gp = 0
@@ -2025,7 +2190,10 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
     # Download tree
     tree_dir_name = forced_out_dir
     if not forced_out_dir:
-        tree_dir_name = find_unused_tree_folder_name(out_dir, rand_tree_data["TREE_ID"])
+        if not args.force_rewrite:
+            tree_dir_name = find_unused_tree_folder_name(out_dir, rand_tree_data["TREE_ID"])
+        else:
+            tree_dir_name = os.path.join(out_dir, rand_tree_data["TREE_ID"])
         dl_tree_path = os.path.join(out_dir, tree_dir_name)
     else:
         dl_tree_path = os.path.join(out_dir, forced_out_dir)
@@ -2048,6 +2216,8 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
 
     assembled_msa_path = os.path.join(dl_tree_path, "assembled_sequences.fasta")
     backup_seq_part_path_tuples = []
+    sorted_seq_paths = []
+
     if args.avoid_empty_sequences:
         num_retries = 3
     for i in range(num_retries):
@@ -2083,7 +2253,7 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
             formatted_seq_path = final_alignment_path.format(seq_part_path)
 
             # generate an MSA in any case without weights in a "dry run", even if we reoptimize later
-            generator.execute(tree_path, seq_part_path, part)
+            generator.execute(tree_path, seq_part_path, part, timeout=SIMULATION_TIMEOUT)
             seq_part_path_tuples.append((formatted_seq_path, current_part_num))
 
             # TODO: this should be (maybe) reworked eventually!
@@ -2108,7 +2278,7 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
             elif args.use_bonk or args.weights:
                 simulate_msa_with_bonk(part, tree_path, seq_part_path, generator, matrix_path=pr_ab_matrix_path)
             else:
-                generator.execute(tree_path, seq_part_path, part)
+                generator.execute(tree_path, seq_part_path, part, timeout=SIMULATION_TIMEOUT)
 
         # Assemble MSAs
         seq_part_path_tuples.sort(key=lambda x: x[1])
@@ -2129,6 +2299,20 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
 
             with open(os.path.join(dl_tree_path, "failed_to_insert_gaps"), "w+") as file:
                 file.write("1\n")
+
+    final_part_list = []
+    part_id_map = {}
+    for part in grouped_results[rand_key]:
+        part_id_map[int(part["PARTITION_NUM"])] = part
+
+    for i, seq_path in enumerate(sorted_seq_paths):
+        seqs = msa_parser.parse_msa_somehow(seq_path)
+        msa_len = len(seqs[0].sequence)
+        part_dct = copy.deepcopy(part_id_map[i])
+        part_dct["NUM_ALIGNMENT_SITES"] = msa_len
+        final_part_list.append(part_dct)
+
+    write_partitions_file(dl_tree_path, final_part_list, "sim_partitions.txt")
 
     return returned_results, returned_paths
 
@@ -2438,7 +2622,9 @@ def main(args_list, is_imported=True):
     args = init_args(args_list)
 
     db_path = args.db_name if args.db_name else DEFAULT_DB_FILE_PATH
-    db_object = BetterTreeDataBase(db_path, force_rewrite=args.force_rewrite)
+
+    force_rewrite = True if args.operation == "create" and args.force_rewrite else False
+    db_object = BetterTreeDataBase(db_path, force_rewrite=force_rewrite)
     meta_info_dict = {
         "COMMIT_HASH": ""
     }
@@ -2515,6 +2701,20 @@ def main(args_list, is_imported=True):
 
         returned_results = grouped_result
 
+    elif args.operation == "download":
+        if not args.use_local_db:
+            meta_info_dict = db_object.get_meta_info()
+        if args.rg_commit_hash:
+            meta_info_dict["COMMIT_HASH"] = args.rg_commit_hash
+
+        result = db_object.find(
+            f"SELECT * FROM TREE t INNER JOIN PARTITION p ON t.TREE_ID = p.PARENT_ID WHERE {args.query};")
+        grouped_result = group_partitions_in_result_dicts(result)
+        grouped_result = filter_incomplete_groups(grouped_result)
+
+        returned_paths = download_trees(args.out_dir, grouped_result, meta_info_dict,
+                                        amount=len(grouped_result), source_dir=args.use_local_db)
+
     elif args.operation == "generate" or args.operation == "justgimmeatree":
         if not args.use_local_db:
             meta_info_dict = db_object.get_meta_info()
@@ -2522,9 +2722,9 @@ def main(args_list, is_imported=True):
             meta_info_dict["COMMIT_HASH"] = args.rg_commit_hash  # TODO: warn if hash was present and is overwritten?
 
         if not args.filter_outliers:
-            query = args.query if args.query else "MODEL LIKE 'GTR%' AND RATE_AC AND FREQ_A AND OVERALL_NUM_ALIGNMENT_SITES > 0"  # TODO: expand possible models
+            query = args.query if args.query else "OVERALL_NUM_ALIGNMENT_SITES > 0"  # TODO: expand possible models
             results = db_object.find(
-                f"{BASE_SQL_FIND_COMMAND} WHERE MODEL LIKE 'GTR%' AND RATE_AC AND FREQ_A AND OVERALL_NUM_ALIGNMENT_SITES > 0 AND {query};")
+                f"{BASE_SQL_FIND_COMMAND} WHERE OVERALL_NUM_ALIGNMENT_SITES > 0 AND {query};")
         else:
             # Categories we currently filter outliers for
             categories = {  # TODO: make this work for AA (and all the other stuff)
@@ -2559,7 +2759,7 @@ def main(args_list, is_imported=True):
             else:
                 query = " AND ".join(filter_list)
             results = db_object.find(
-                f"{BASE_SQL_FIND_COMMAND} WHERE MODEL LIKE 'GTR%' AND RATE_AC AND FREQ_A AND OVERALL_NUM_ALIGNMENT_SITES > 0 AND {query};")
+                f"{BASE_SQL_FIND_COMMAND} WHERE OVERALL_NUM_ALIGNMENT_SITES > 0 AND {query};")
 
         grouped_results = group_partitions_in_result_dicts(results)
         grouped_results = filter_incomplete_groups(grouped_results)

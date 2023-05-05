@@ -56,16 +56,12 @@ extended_key_list.extend([
 
 key_list_norm_groups = {
     "num_sites": [
-        # "avg_indel_len",
+        "avg_indel_len",
         "alignment_len",
         "msa_max_len",
         "msa_min_len",
         # "total_num_of_indels",
-        "num_of_indels_of_len_one",
-        "num_of_indels_of_len_two",
-        "num_of_indels_of_len_three",
-        "num_of_indels_of_len_at_least_four",
-        # "avg_unique_indel_len",
+        "avg_unique_indel_len",
         # "total_num_of_unique_indels",
         "num_of_indels_of_len_one_in_one_pos",
         "num_of_indels_of_len_one_in_two_pos",
@@ -83,7 +79,6 @@ key_list_norm_groups = {
         "num_of_msa_pos_with_1_gaps",
         "num_of_msa_pos_with_2_gaps",
         "num_of_msa_pos_with_n_minus_1_gaps",
-
         "max_pattern_weight",
     ],
     "num_patterns": [
@@ -94,10 +89,14 @@ key_list_norm_groups = {
     "sites_times_taxa": [
         "total_num_of_indels",
         "total_num_of_unique_indels",
+        "num_of_indels_of_len_one",
+        "num_of_indels_of_len_two",
+        "num_of_indels_of_len_three",
+        "num_of_indels_of_len_at_least_four",
     ],
     "normalized": [
-        "avg_indel_len",
-        "avg_unique_indel_len",
+        # "avg_indel_len",
+        # "avg_unique_indel_len",
     ]
 }
 
@@ -330,6 +329,34 @@ def get_gap_features(sequences):
 
     feature_vec = [feature_dict[key] for key in key_list]
     return feature_vec
+
+
+def get_gap_feature_dict(sequences):
+    feature_dict = _calc_gap_features(sequences)
+
+    return feature_dict
+
+
+def get_normalized_gap_feature_dict(sequences):
+    feature_dict = get_gap_feature_dict(sequences)
+
+    num_sites = feature_dict["alignment_len"]
+    # num_patterns = feature_dict["num_patterns"]
+    sites_times_taxa = num_sites * len(sequences)
+
+    norm_dict = []
+    for g in key_list_norm_groups:
+        norm_dict.extend([(x, g) for x in key_list_norm_groups[g]])
+    norm_dict = dict(norm_dict)
+
+    for key in key_list:
+        if norm_dict[key] == "num_sites":
+            feature_dict[key] = feature_dict[key] / num_sites
+        # elif norm_dict[key] == "num_patterns":
+        #     feature_dict[key] = feature_dict[key] / num_patterns
+        elif norm_dict[key] == "sites_times_taxa":
+            feature_dict[key] = feature_dict[key] / sites_times_taxa
+    return feature_dict
 
 
 def get_extended_gap_features(sequences):
