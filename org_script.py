@@ -23,8 +23,6 @@ from Bio import Phylo, SeqIO, Seq, SeqRecord
 from skopt import Optimizer, space, gp_minimize
 from skopt.utils import use_named_args
 
-#sys.path.insert(1, os.path.dirname(os.path.abspath(__file__)))
-#import tools.SpartaABC.main as sparta
 import tools.util.msa_parser as msa_parser
 import tools.util.modified_SpartaABC as sparta_util
 
@@ -491,47 +489,6 @@ class AliSim(Simulator):
                     return key
         return model
 
-    def fix_dna_rate_string(self, model, rate_str):
-        rate_str = rate_str.replace("{", "").replace("}", "")
-        rate_list = rate_str.split("/")
-        order = ["AC", "AG", "AT", "CG", "CT", "GT"]
-
-        mapping = {     # from https://github.com/ddarriba/modeltest/wiki/Models-of-Evolution
-            "JC": [],
-            "F81": [],
-            "K80": ["AC", "AG"],
-            "HKY": ["AC", "AG"],
-            "TrNef": ["AC", "AG", "CT"],
-            "TN93ef": ["AC", "AG", "CT"],
-            "TrN": ["AC", "AG", "CT"],
-            "TN93": ["AC", "AG", "CT"],
-            "TPM1": ["AC", "AG", "AT"],
-            "K81": ["AC", "AG", "AT"],
-            "TPM1uf": ["AC", "AG", "AT"],
-            "K81uf": ["AC", "AG", "AT"],
-            "TPM2": ["AC", "CG", "AG"],
-            "TPM2uf": ["AC", "CG", "AG"],
-            "TPM3": ["AC", "AG", "AT"],
-            "TPM3uf": ["AC", "AG", "AT"],
-            "TIM1": ["AC", "AT", "AG", "CT"],
-            "TIM1uf": ["AC", "AT", "AG", "CT"],
-            "TIM2": ["AC", "CG", "AG", "CT"],
-            "TIM2uf": ["AC", "CG", "AG", "CT"],
-            "TIM3": ["AC", "AT", "AG", "CT"],
-            "TIM3uf": ["AC", "AT", "AG", "CT"],
-            "TVMef": ["AC", "CG", "AT", "GT", "AG"],
-            "TMV": ["AC", "CG", "AT", "GT", "AG"],
-            "SYM": ["AC", "CG", "AT", "GT", "AG", "CT"],
-            "GTR": ["AC", "CG", "AT", "GT", "AG", "CT"],
-            "REV": ["AC", "CG", "AT", "GT", "AG", "CT"],
-        }
-
-        out_rates = []
-        for i, s in enumerate(order):
-            if s in mapping[model]:
-                out_rates.append(rate_list[i])
-        return out_rates
-
     def execute(self, tree_path, out_path, tree_params, new_seq_len=0, indel_rates=(), indel_distr=(), indel_distr_params=(), timeout=SIMULATION_TIMEOUT):
         out_dir = os.path.dirname(os.path.abspath(out_path))
         file_name = os.path.basename(out_path)
@@ -545,32 +502,34 @@ class AliSim(Simulator):
             else:
                 seq_len = tree_params["NUM_ALIGNMENT_SITES"]
 
-            """
-            model_string = f'{tree_params["MODEL"]}' + "{" \
-                           f'{tree_params["RATE_AC"]}/{tree_params["RATE_AG"]}/{tree_params["RATE_CG"]}/{tree_params["RATE_CT"]}/{tree_params["RATE_GT"]}' + "}" \
-                           '+F{' + f'{tree_params["FREQ_A"]}/{tree_params["FREQ_C"]}/{tree_params["FREQ_G"]}/{tree_params["FREQ_T"]}' + '}'
-            """
-            freq_str = tree_params["FREQ_STR"].split("{")[1]
-            freq_str = freq_str.replace("{", "").replace("}", "")
-            rate_str = tree_params["RATE_STR"].split("{")[1]
-            rate_str = rate_str.replace("{", "").replace("}", "")
-
             model = self.replace_model_name(tree_params['MODEL'])
-            if tree_params["DATA_TYPE"] == "DNA":
-                rate_str = "/".join(self.fix_dna_rate_string(model, rate_str))
-            elif tree_params["DATA_TYPE"] == "AA":
-                if model == "GTR":      # TODO: maybe handle these exceptions more gracefully...
-                    model = "GTR20"
-                    # remove the base 1.0 in the end since AliSim does not understand it for some reason (?)
-                    rate_str = "/".join(rate_str.split("/")[:-1])
-                pass
-            model_string = f"{model}{{{rate_str}}}" \
-                           f"+F{{{freq_str}}}"
+            model_string = f"{model}"
+
+            if tree_params["RATE_STR"] != "None" and "{" in tree_params["RATE_STR"]:
+                rate_str = tree_params["RATE_STR"].split("{")[1]
+                rate_str = rate_str.replace("{", "").replace("}", "")
+
+                if tree_params["DATA_TYPE"] == "AA":
+                    if model == "GTR":  # TODO: maybe handle these exceptions more gracefully...
+                        model = "GTR20"
+                        model_string = f"{model}"
+                        # remove the base 1.0 in the end since AliSim does not understand it for some reason (?)
+                        rate_str = "/".join(rate_str.split("/")[:-1])
+
+                model_string += f"{{{rate_str}}}"
+            if tree_params["STATIONARY_FREQ_STR"] != "None":
+                freq_str = tree_params["STATIONARY_FREQ_STR"].split("{")[1]
+                freq_str = freq_str.replace("{", "").replace("}", "")
+                model_string += f"+F{{{freq_str}}}"
 
             if tree_params["ALPHA"] != "None":
                 model_string += '+G{' + f'{tree_params["ALPHA"]}' + "}"
-            if tree_params["INVARIANT_SITES"] != "None":
-                model_string += "+I{" + f"{tree_params['INVARIANT_SITES']}" + "}"
+            if tree_params["INVARIANT_SITES"] != "None" and tree_params["RAXML_NG"] == 0:
+                model_string += "+I{" + f"{float(tree_params['INVARIANT_SITES']) / 100}" + "}"
+            elif tree_params["PROPORTION_INVARIANT_SITES_STR"] != "None":
+                invar_str = tree_params['PROPORTION_INVARIANT_SITES_STR']
+                invar_str = invar_str.split("{")[1].replace("}", "")
+                model_string += f"+I{{{invar_str}}}"
 
             call = [
                 self.execute_path,
@@ -913,7 +872,7 @@ class RaxmlNGLogReader(object):
                     global_exception_counter += 1
                     continue
 
-                modifiers_info = line.rstrip().split("+")
+                modifiers_info = line.rstrip().split(",")[0].split("+")
 
                 model = self.__get_modifier(modifiers_info[0])
                 self.partitions_dict[part_key]["RATE_STR"] = modifiers_info[0]
@@ -1454,9 +1413,6 @@ def save_tree_dict(path, result):
 
 
 def write_partitions_file(dir_path, partition_results, file_name=""):
-    #if partition_results[0]["OVERALL_NUM_PARTITIONS"] == 1:
-    #    return
-
     sorted_parts = copy.deepcopy(partition_results)
     sorted_parts.sort(key=lambda x: int(x["PARTITION_NUM"]))
     if not file_name:
@@ -1469,8 +1425,12 @@ def write_partitions_file(dir_path, partition_results, file_name=""):
             model_str = part["MODEL"]
             if part["ALPHA"] != "None":
                 model_str += "+G"
-            if part["INVARIANT_SITES"] != "None":
+            if part["INVARIANT_SITES"] != "None" and part["RAXML_NG"] == 0:
                 model_str += "+I"
+            elif part["PROPORTION_INVARIANT_SITES_STR"] != "None":
+                invar_str = part['PROPORTION_INVARIANT_SITES_STR']
+                invar_str = invar_str.split("{")[0]
+                model_str += f"+{invar_str}"
             line = f"{part['DATA_TYPE']}, {model_str}, partition_{part['PARTITION_NUM']} = " \
                    f"{current_site_num}-{current_site_num + int(part['NUM_ALIGNMENT_SITES']) - 1}\n"
             current_site_num += int(part["NUM_ALIGNMENT_SITES"])
@@ -1911,43 +1871,6 @@ def split_msa(msa_path, part_path="", msa_format="fasta"):
 
     return part_dict
 
-
-def get_msa_params_from_raxml(msa_path):
-    raxml_path = RAXML_NG_PATH
-    msa_dir = os.path.dirname(msa_path)
-    prefix = "parse"
-
-    command = [
-        raxml_path, "--parse",
-        "--msa", msa_path,
-        "--model", "GTR+G",
-        "--prefix", prefix,
-        "--redo"
-    ]
-    try:
-        subprocess.check_output(command, cwd=msa_dir)
-    except Exception as e:  # TODO: fix this (set model correctly for --parse)
-        print(f"RAxML-NG parsing did not work!\n"
-              f"{e}")
-        return -1, -1, -1
-    raxml_log_path = os.path.join(msa_dir, f"{prefix}.raxml.log")
-
-    sl = pn = gp = 0
-    with open(raxml_log_path) as file:
-        for line in file:
-            if line.startswith("Alignment sites / patterns:"):
-                line = line.replace(" ", "").split(":")
-                # sl = int(line[1].split("/")[0])
-                pn = int(line[1].split("/")[1])
-            elif line.startswith("Gaps:"):
-                line = line.replace(" ", "").split(":")
-                gp = float(line[1].split("%")[0])
-            elif "Loaded alignment with" in line:
-                tres = re.findall("taxa and (.*?) sites", line)
-                sl = int(tres[0])
-    return sl, pn, gp
-
-
 def fix_tree_for_indelible(source_path, dest_path):
     """
     INDELible has strange issues reading newick tree files. We try to avoid some of these.
@@ -2097,9 +2020,6 @@ def simulate_msa_with_sparta(part_dict, msa_path, tree_path, msa_out_path, gener
                       distance_class=sparta_util.SpartaDist, generator=generator)
     eval.evaluate([rl, r_i, r_d, a_i, a_d])
 
-    print(f"orig: {get_msa_params_from_raxml(fixed_msa_path)}")
-    print(f"sim: {get_msa_params_from_raxml(msa_out_path)}")
-
 
 def simulate_msa_with_extended_sparta(part_dict, msa_path, tree_path, msa_out_path, generator,
                            dist_function=sparta_util.sparta_extended_dist):
@@ -2123,9 +2043,6 @@ def simulate_msa_with_extended_sparta(part_dict, msa_path, tree_path, msa_out_pa
                                       distance_class=sparta_util.ExtendedSpartaDist, generator=generator)
     gp_res = gp_minimize(evaluator.evaluate, search_space, n_calls=num_rounds)
 
-    print(f"orig: {get_msa_params_from_raxml(msa_path)}")
-    print(f"sim: {get_msa_params_from_raxml(msa_out_path)}")
-
 
 def simulate_msa_with_bonk(part_dict, tree_path, msa_out_path, generator, matrix_path=""):
     rl = part_dict["NUM_ALIGNMENT_SITES"]
@@ -2148,9 +2065,6 @@ def simulate_msa_with_bonk(part_dict, tree_path, msa_out_path, generator, matrix
                            generator=generator, weights=weights, data_type=part_dict["DATA_TYPE"],
                            matrix_path=matrix_path)
     gp_res = gp_minimize(evaluator.evaluate, search_space, n_calls=num_rounds)
-
-    print(f"orig: {reference_features}")
-    print(f"sim: {get_msa_params_from_raxml(msa_out_path)}")
 
 
 def create_generator(args):
@@ -2577,9 +2491,12 @@ def print_statistics(db_object, query):
                   f"    mean {statistics.mean(filtered_values)} "
                   f"median {statistics.median(filtered_values)}"
                   )
+            hp_index = int(len(sorted_values) * hp) + 1
+            if hp_index == len(sorted_values) and len(sorted_values) > 0:
+                hp_index = hp_index - 1
 
             print(f"  {perc}:\n"
-                  f"    low {sorted_values[int(len(sorted_values) * lp)]}  high {sorted_values[int(len(sorted_values) * hp) + 1]}\n"
+                  f"    low {sorted_values[int(len(sorted_values) * lp)]}  high {sorted_values[hp_index]}\n"
                   )
 
     for cat in cat_str_values:
