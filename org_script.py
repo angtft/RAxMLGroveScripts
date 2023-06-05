@@ -494,9 +494,6 @@ class AliSim(Simulator):
         file_name = os.path.basename(out_path)
 
         try:
-            #if tree_params["MODEL"] != "GTR":
-            #    raise NotImplementedError("Only GTR model implemented for simulations right now :(")
-
             if new_seq_len:
                 seq_len = new_seq_len
             else:
@@ -775,11 +772,6 @@ class RaxmlNGLogReader(object):
             global global_exception_counter
             global_exception_counter += 1
             raise e
-
-    def _read_fix(self):
-        # TODO: implement
-        with open(self.path) as file:
-            pass
 
     def __read(self):
         """
@@ -1414,7 +1406,13 @@ def save_tree_dict(path, result):
 
 def write_partitions_file(dir_path, partition_results, file_name=""):
     sorted_parts = copy.deepcopy(partition_results)
-    sorted_parts.sort(key=lambda x: int(x["PARTITION_NUM"]))
+    print(sorted_parts)
+    try:
+        sorted_parts.sort(key=lambda x: int(x["PARTITION_NUM"]))
+    except ValueError:
+        if sorted_parts[0]["OVERALL_NUM_PARTITIONS"] != 1:
+            raise ValueError(f"{sorted_parts['TREE_ID']} contains partition(s) with invalid PARTITION_NUM")
+
     if not file_name:
         file_path = os.path.join(dir_path, "partitions.txt")
     else:
