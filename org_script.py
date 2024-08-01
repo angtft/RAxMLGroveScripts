@@ -1285,8 +1285,8 @@ def init_args(arguments):
     parser.add_argument("--local", default=True, help="FOR TESTING PURPOSES (don't use it).")
     parser.add_argument("--force-rewrite", action='store_true', help="Forces to rewrite the default db or the db "
                                                                      "specified using '-n'. (create)")
-    parser.add_argument("--seq-len", default=8000, help="Sets the sequence length of the generated MSA (starting "
-                                                        "sequence length if indels are used). (generate)")
+    parser.add_argument("--seq-len", default=0, help="Sets the sequence length of the generated MSA (starting "
+                                                     "sequence length if indels are used). (generate)")
     parser.add_argument("--filter-outliers", action='store_true', help="Filters trees with uncommon characteristics "
                                                                        "(using Tukey's fences). (generate)")
     parser.add_argument("--insert-matrix-gaps", action="store_true", help="Uses the presence/absence matrices to "
