@@ -1285,13 +1285,8 @@ def init_args(arguments):
     parser.add_argument("--local", default=True, help="FOR TESTING PURPOSES (don't use it).")
     parser.add_argument("--force-rewrite", action='store_true', help="Forces to rewrite the default db or the db "
                                                                      "specified using '-n'. (create)")
-    parser.add_argument("--seq-len", default=8000, help="Default generated sequence length if it is not specified in "
-                                                        "the tree log data. (generate)")
-    # TODO: maybe reintroduce this argument at some point when it is clear how to handle edge cases...
-    parser.add_argument("--set-seq-len",
-                        help=argparse.SUPPRESS)
-                        #help="CURRENTLY NOT WORKING! Sets the generated sequence length IGNORING the sequence length "
-                        #     "specified in the tree log data. (generate)")
+    parser.add_argument("--seq-len", default=8000, help="Sets the sequence length of the generated MSA (starting "
+                                                        "sequence length if indels are used). (generate)")
     parser.add_argument("--filter-outliers", action='store_true', help="Filters trees with uncommon characteristics "
                                                                        "(using Tukey's fences). (generate)")
     parser.add_argument("--insert-matrix-gaps", action="store_true", help="Uses the presence/absence matrices to "
@@ -1365,6 +1360,13 @@ def init_args(arguments):
         parser.error("Mutually exclusive arguments used: --use-sparta and --use-modified-sparta")
     if args.generator != "alisim" and (args.use_bonk or args.use_sparta or args.use_modified_sparta or args.indel):
         parser.error("Indels are currently only usable with AliSim!")
+    if args.seq_len:
+        try:
+            args.seq_len = int(args.seq_len)
+            if args.seq_len <= 0:
+                parser.error("Sequence length may not be <= 0!")
+        except:
+            parser.error(f"Error converting sequence length {args.seq_len} to int!")
 
     return args
 
@@ -2156,6 +2158,12 @@ def generate_sequences(grouped_results, args, meta_info_dict, forced_out_dir="")
             part_msa_paths = split_msa(msa_path, part_path=model_path, msa_format="fasta")
 
         for part in partitions:
+            if args.seq_len:
+                tmp_nsites = max(args.seq_len // part["OVERALL_NUM_PARTITIONS"], 1)
+                part["NUM_ALIGNMENT_SITES"] = tmp_nsites
+                if part["PARTITION_NUM"] in [0, "0"]:
+                    part["NUM_ALIGNMENT_SITES"] = tmp_nsites + (args.seq_len % part["OVERALL_NUM_PARTITIONS"])
+
             if part["PARTITION_NUM"] == "None":
                 part["PARTITION_NUM"] = 0
             current_part_num = part["PARTITION_NUM"]
