@@ -474,7 +474,19 @@ class AliSim(Simulator):
         subs = {
             "BLOSUM62": "Blosum62",
             "PROTGTR": "GTR20",
-            "PROTGTRGAMMA": "GTR20"
+            "PROTGTRGAMMA": "GTR20",
+            "TN93ef": "TNe",
+            "K81uf": "K81u",
+            "TVM": "TVM",
+            "TVMef": "TVMe",
+            "TPM2uf": "TPM2u",
+            "TPM3uf": "TPM3u",
+            "TIM1": "TIMe",
+            "TIM1uf": "TIM",            # TODO: check. according to IQ-TREE2 docs, this looks like the one though (https://github.com/iqtree/iqtree2/wiki/Substitution-Models)
+            "TIM2": "TIM2e",
+            "TIM2uf": "TIM2",
+            "TIM3": "TIM3e",
+            "TIM3uf": "TIM3",
         }
         for key in models:
             if model.startswith("PROT"):
@@ -482,11 +494,9 @@ class AliSim(Simulator):
                     if key in subs:
                         return subs[key]
                     return key
-            else:
-                if model.startswith(key):
-                    if key in subs:
-                        return subs[key]
-                    return key
+
+        if model in subs:
+            return subs[model]
         return model
 
     def execute(self, tree_path, out_path, tree_params, new_seq_len=0, indel_rates=(), indel_distr=(), indel_distr_params=(), timeout=SIMULATION_TIMEOUT):
@@ -536,6 +546,7 @@ class AliSim(Simulator):
                 "-t", tree_path,
                 "--length", f"{seq_len}",
                 "-af", "fasta",
+                "--seqtype", f"{tree_params['DATA_TYPE']}",
                 "--no-export-sequence-wo-gaps"
             ]
             if indel_rates:
@@ -554,7 +565,9 @@ class AliSim(Simulator):
                     "--seed", self.seed_line
                 ])
 
-            subprocess.run(call, cwd=BASE_FILE_DIR, stdout=subprocess.DEVNULL, timeout=timeout)
+            alisim_log_path = os.path.join(out_dir, f"alisim_log_{file_name.split('.')[1]}.txt")
+            with open(alisim_log_path, "w+") as file:
+                subprocess.run(call, cwd=BASE_FILE_DIR, stdout=file, stderr=file, timeout=timeout)
         except subprocess.TimeoutExpired:
             print(f"AliSim.execute() timeout (after {timeout}s)!")
             return 1
@@ -1599,7 +1612,8 @@ def read_pr_ab_matrix(path):
         num_bits = 0
         num_0 = 0
         num_1 = 0
-        matrix = []
+        #matrix = []
+        matrix = {}
 
         for line in file:
             line_spl = line.rstrip().split()
@@ -1619,7 +1633,8 @@ def read_pr_ab_matrix(path):
 
                 temp_list.append(val)
             temp_list.reverse()
-            matrix.append(temp_list)
+            #matrix.append(temp_list)
+            matrix[line_spl[0]] = temp_list
 
     return num_0, num_1, matrix
 
@@ -1719,7 +1734,8 @@ def assemble_sequences(path_list, out_path, matrix_path="", in_format=BASE_DAWG_
     for i in range(len(records_list[0])):
         sequence = ""
         for j in range(len(path_list)):
-            bit = matrix[i][j] if matrix else 1
+            taxon_name = records_list[j][i].id
+            bit = matrix[taxon_name][j] if matrix else 1
 
             if bit:
                 sequence += str(records_list[j][i].seq)
@@ -1807,7 +1823,8 @@ def blank_sequences_in_partition(part_seq_path, part_num, pr_ab_matrix_path):
         new_records = []
         for rec_num in range(len(records)):
             record = records[rec_num]
-            if pr_ab_matrix[rec_num][part_num] == 1:
+            taxon_name = record.id
+            if pr_ab_matrix[taxon_name][part_num] == 1:
                 new_records.append(record)
             else:
                 sequence = BLANK_SYMBOL * len(record.seq)
